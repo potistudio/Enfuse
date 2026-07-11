@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::analysis;
-use crate::audio::{self, AudioEngine, Deck, DeckData, DECK_COUNT};
+use crate::audio::{self, AudioEngine, DECK_COUNT, Deck, DeckData};
 use crate::ui::disc::RotatingDisc;
 use crate::ui::spectrum::Spectrum;
 use crate::ui::waveform::{Waveform, WaveformOutput};
@@ -126,6 +126,7 @@ impl App {
 				text: Color::WHITE,
 				primary: Color::from_rgb8(100, 149, 237),
 				success: Color::from_rgb8(50, 205, 50),
+				warning: Color::from_rgb8(255, 165, 0),
 				danger: Color::from_rgb8(220, 20, 60),
 			},
 		)
@@ -462,8 +463,12 @@ impl App {
 
 		let mixer_view = column![
 			row![
-				row![disc_a, vol_col(0, "VOL A")].spacing(8).align_y(iced::Alignment::Center),
-				row![vol_col(1, "VOL B"), disc_b].spacing(8).align_y(iced::Alignment::Center)
+				row![disc_a, vol_col(0, "VOL A")]
+					.spacing(8)
+					.align_y(iced::Alignment::Center),
+				row![vol_col(1, "VOL B"), disc_b]
+					.spacing(8)
+					.align_y(iced::Alignment::Center)
 			]
 			.spacing(30),
 			text("CROSSFADER").size(10),
@@ -495,9 +500,18 @@ impl App {
 // --- Track Loader Subscription ---
 
 fn track_loader(deck_id: usize, path: PathBuf) -> Subscription<Message> {
-	Subscription::run_with_id(
-		(deck_id, path.clone()),
-		iced::stream::channel(100, move |mut output| async move {
+	Subscription::run_with((deck_id, path), track_loader_stream)
+}
+
+fn track_loader_stream(
+	(deck_id, path): &(usize, PathBuf),
+) -> impl iced::futures::Stream<Item = Message> + use<> {
+	let deck_id = *deck_id;
+	let path = path.clone();
+
+	iced::stream::channel(
+		100,
+		move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
 			let (tx_internal, mut rx_internal) = tokio::sync::mpsc::unbounded_channel();
 
 			tokio::task::spawn_blocking(move || {
@@ -522,7 +536,7 @@ fn track_loader(deck_id: usize, path: PathBuf) -> Subscription<Message> {
 					break;
 				}
 			}
-		}),
+		},
 	)
 }
 
@@ -537,7 +551,9 @@ fn view_deck<'a>(id: usize, deck: &Deck, state: &'a DeckState) -> Element<'a, Me
 	let title = if id == 0 { "DECK A" } else { "DECK B" };
 
 	let play_pause_btn = if deck.is_playing {
-		button("PAUSE").on_press(Message::DeckPause(id)).style(deck_button_style)
+		button("PAUSE")
+			.on_press(Message::DeckPause(id))
+			.style(deck_button_style)
 	} else {
 		button("PLAY").on_press(Message::DeckPlay(id)).style(deck_button_style)
 	};
@@ -550,7 +566,7 @@ fn view_deck<'a>(id: usize, deck: &Deck, state: &'a DeckState) -> Element<'a, Me
 		Element::from(
 			column![
 				text("ANALYZING...").size(12),
-				progress_bar::<Theme>(0.0..=1.0, state.progress).height(8)
+				progress_bar::<Theme>(0.0..=1.0, state.progress).girth(8)
 			]
 			.spacing(4)
 			.align_x(iced::Alignment::Center),
@@ -647,6 +663,7 @@ fn deck_button_style(_theme: &Theme, status: button::Status) -> button::Style {
 			radius: 4.0.into(),
 		},
 		shadow: iced::Shadow::default(),
+		snap: false,
 	}
 }
 

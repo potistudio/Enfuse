@@ -63,15 +63,11 @@ impl<'a> canvas::Program<WaveformOutput> for Waveform<'a> {
 	fn update(
 		&self,
 		state: &mut Self::State,
-		event: canvas::Event,
+		event: &canvas::Event,
 		bounds: Rectangle,
 		cursor: mouse::Cursor,
-	) -> (iced::event::Status, Option<WaveformOutput>) {
-		let cursor_position = if let Some(p) = cursor.position_in(bounds) {
-			p
-		} else {
-			return (iced::event::Status::Ignored, None);
-		};
+	) -> Option<canvas::Action<WaveformOutput>> {
+		let cursor_position = cursor.position_in(bounds)?;
 
 		match event {
 			canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -81,11 +77,11 @@ impl<'a> canvas::Program<WaveformOutput> for Waveform<'a> {
 						let new_zoom = (self.zoom + y * zoom_sensitivity).clamp(0.2, 5.0);
 
 						if (new_zoom - self.zoom).abs() > 0.001 {
-							return (iced::event::Status::Captured, Some(WaveformOutput::Zoom(new_zoom)));
+							return Some(canvas::Action::publish(WaveformOutput::Zoom(new_zoom)).and_capture());
 						}
 					}
 				}
-				(iced::event::Status::Ignored, None)
+				None
 			}
 			canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
 				let count = self.data.len() as f32;
@@ -97,14 +93,14 @@ impl<'a> canvas::Program<WaveformOutput> for Waveform<'a> {
 
 				if count > 0.0 {
 					// Stop/Hold the record on press
-					(iced::event::Status::Captured, Some(WaveformOutput::Scratch(0.0)))
+					Some(canvas::Action::publish(WaveformOutput::Scratch(0.0)).and_capture())
 				} else {
-					(iced::event::Status::Captured, None)
+					Some(canvas::Action::capture())
 				}
 			}
 			canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
 				*state = WaveformState::Idle;
-				(iced::event::Status::Captured, Some(WaveformOutput::Released))
+				Some(canvas::Action::publish(WaveformOutput::Released).and_capture())
 			}
 			canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
 				if let WaveformState::Dragging { last_x, last_time } = *state {
@@ -139,12 +135,12 @@ impl<'a> canvas::Program<WaveformOutput> for Waveform<'a> {
 							last_time: now,
 						};
 
-						return (iced::event::Status::Captured, Some(WaveformOutput::Scratch(speed)));
+						return Some(canvas::Action::publish(WaveformOutput::Scratch(speed)).and_capture());
 					}
 				}
-				(iced::event::Status::Ignored, None)
+				None
 			}
-			_ => (iced::event::Status::Ignored, None),
+			_ => None,
 		}
 	}
 

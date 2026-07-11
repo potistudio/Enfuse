@@ -130,8 +130,8 @@ impl<'a> canvas::Program<()> for RotatingDisc<'a> {
 						),
 						color: Color::from_rgba(1.0, 1.0, 1.0, 1.0 - eased),
 						size: iced::Pixels(label_radius * 0.75),
-						horizontal_alignment: iced::alignment::Horizontal::Center,
-						vertical_alignment: iced::alignment::Vertical::Center,
+						align_x: iced::widget::text::Alignment::Center,
+						align_y: iced::alignment::Vertical::Center,
 						..canvas::Text::default()
 					});
 				}
@@ -145,8 +145,8 @@ impl<'a> canvas::Program<()> for RotatingDisc<'a> {
 						),
 						color: Color::from_rgba(1.0, 1.0, 1.0, eased),
 						size: iced::Pixels(label_radius * 0.75),
-						horizontal_alignment: iced::alignment::Horizontal::Center,
-						vertical_alignment: iced::alignment::Vertical::Center,
+						align_x: iced::widget::text::Alignment::Center,
+						align_y: iced::alignment::Vertical::Center,
 						..canvas::Text::default()
 					});
 					frame.fill_text(canvas::Text {
@@ -154,8 +154,8 @@ impl<'a> canvas::Program<()> for RotatingDisc<'a> {
 						position: Point::new(center.x, center.y + label_radius * 0.55),
 						color: Color::from_rgba(1.0, 1.0, 1.0, 0.7 * eased),
 						size: iced::Pixels(label_radius * 0.3),
-						horizontal_alignment: iced::alignment::Horizontal::Center,
-						vertical_alignment: iced::alignment::Vertical::Center,
+						align_x: iced::widget::text::Alignment::Center,
+						align_y: iced::alignment::Vertical::Center,
 						..canvas::Text::default()
 					});
 				}

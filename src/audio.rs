@@ -20,8 +20,8 @@ pub const DECK_COUNT: usize = 2;
 
 pub struct AudioEngine {
 	//...
-	_stream: OutputStream,
-	stream_handle: OutputStreamHandle,
+	_stream: MixerDeviceSink,
+	mixer: mixer::Mixer,
 	pub decks: Vec<Arc<Mutex<Deck>>>,
 }
 
@@ -33,15 +33,16 @@ impl Default for AudioEngine {
 
 impl AudioEngine {
 	pub fn new() -> Self {
-		let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+		let _stream = DeviceSinkBuilder::open_default_sink().unwrap();
+		let mixer = _stream.mixer().clone();
 
 		let decks = (0..DECK_COUNT)
-			.map(|_| Arc::new(Mutex::new(Deck::new(stream_handle.clone()))))
+			.map(|_| Arc::new(Mutex::new(Deck::new(mixer.clone()))))
 			.collect();
 
 		Self {
 			_stream,
-			stream_handle,
+			mixer,
 			decks,
 		}
 	}
@@ -69,15 +70,15 @@ where
 
 	let source = rodio::Decoder::new(BufReader::new(file)).map_err(|e| e.to_string())?;
 
-	let channels = source.channels();
-	let sample_rate = source.sample_rate();
+	let channels = source.channels().get();
+	let sample_rate = source.sample_rate().get();
 	let total_duration = source.total_duration(); // Option<Duration>
 
 	// We'll collect samples here
 	let mut samples: Vec<f32> = Vec::with_capacity(sample_rate as usize * 60 * 3); // Pre-alloc 3 mins approx
 
-	// Convert to iterator
-	let mut sample_iter = source.convert_samples::<f32>();
+	// Decoder already yields f32 samples directly
+	let mut sample_iter = source;
 
 	let mut count = 0;
 	// Notify every 0.1s (sample_rate / 10)
@@ -155,8 +156,8 @@ pub fn decode_file(path: PathBuf) -> Result<DeckData, String> {
 use std::f32::consts::PI;
 
 pub struct Deck {
-	handle: OutputStreamHandle,
-	sink: Option<Sink>,
+	mixer: mixer::Mixer,
+	player: Option<Player>,
 
 	// Audio Data
 	pub samples: Arc<Vec<f32>>, // Arc for sharing
@@ -188,10 +189,10 @@ pub struct Deck {
 }
 
 impl Deck {
-	pub fn new(handle: OutputStreamHandle) -> Self {
+	pub fn new(mixer: mixer::Mixer) -> Self {
 		Self {
-			handle,
-			sink: None,
+			mixer,
+			player: None,
 			samples: Arc::new(Vec::new()),
 			waveform: Vec::new(),
 			channels: 2,
@@ -234,7 +235,7 @@ impl Deck {
 		// メトロノームの拍カウントをリセット
 		self.last_beat_index = -1;
 
-		if self.sink.is_none() {
+		if self.player.is_none() {
 			if !self.samples.is_empty() {
 				// Use ScratchSource
 				let scratch_source = ScratchSource::new(
@@ -255,15 +256,15 @@ impl Deck {
 
 				let source = SpySource::new(eq_source, prod);
 
-				let sink = Sink::try_new(&self.handle).unwrap();
-				sink.append(source);
-				sink.set_volume(self.volume);
-				// We do NOT use sink.set_speed, we use our internal speed
+				let player = Player::connect_new(&self.mixer);
+				player.append(source);
+				player.set_volume(self.volume);
+				// We do NOT use player.set_speed, we use our internal speed
 
-				self.sink = Some(sink);
+				self.player = Some(player);
 			}
-		} else if let Some(sink) = &self.sink {
-			sink.play();
+		} else if let Some(player) = &self.player {
+			player.play();
 		}
 
 		self.control_speed.store(f32_to_u32(self.user_speed), Ordering::Relaxed);
@@ -271,25 +272,25 @@ impl Deck {
 	}
 
 	pub fn pause(&mut self) {
-		if let Some(sink) = &self.sink {
-			sink.pause();
+		if let Some(player) = &self.player {
+			player.pause();
 		}
 		self.is_playing = false;
 	}
 
 	pub fn stop(&mut self) {
-		if let Some(sink) = &self.sink {
-			sink.stop();
+		if let Some(player) = &self.player {
+			player.stop();
 		}
-		self.sink = None;
+		self.player = None;
 		self.is_playing = false;
 		self.control_cursor.store(0, Ordering::Relaxed);
 	}
 
 	pub fn set_volume(&mut self, volume: f32) {
 		self.volume = volume;
-		if let Some(sink) = &self.sink {
-			sink.set_volume(volume);
+		if let Some(player) = &self.player {
+			player.set_volume(volume);
 		}
 	}
 
@@ -362,10 +363,9 @@ impl Deck {
 				.take_duration(Duration::from_millis(40))
 				.amplify(0.5);
 
-			if let Ok(sink) = Sink::try_new(&self.handle) {
-				sink.append(click);
-				sink.detach(); // 自動再生して解放
-			}
+			let click_player = Player::connect_new(&self.mixer);
+			click_player.append(click);
+			click_player.detach(); // 自動再生して解放
 		}
 	}
 }
@@ -506,8 +506,8 @@ where
 	I: Source<Item = f32>,
 {
 	pub fn new(input: I, low: Arc<AtomicU32>, mid: Arc<AtomicU32>, high: Arc<AtomicU32>) -> Self {
-		let channels = input.channels() as usize;
-		let sample_rate = input.sample_rate();
+		let channels = input.channels().get() as usize;
+		let sample_rate = input.sample_rate().get();
 		let mut source = Self {
 			input,
 			low_filter: vec![Biquad::new(); channels],
@@ -608,13 +608,13 @@ impl<I> Source for EqSource<I>
 where
 	I: Source<Item = f32>,
 {
-	fn current_frame_len(&self) -> Option<usize> {
-		self.input.current_frame_len()
+	fn current_span_len(&self) -> Option<usize> {
+		self.input.current_span_len()
 	}
-	fn channels(&self) -> u16 {
+	fn channels(&self) -> ChannelCount {
 		self.input.channels()
 	}
-	fn sample_rate(&self) -> u32 {
+	fn sample_rate(&self) -> SampleRate {
 		self.input.sample_rate()
 	}
 	fn total_duration(&self) -> Option<Duration> {
@@ -695,14 +695,14 @@ impl Iterator for ScratchSource {
 }
 
 impl Source for ScratchSource {
-	fn current_frame_len(&self) -> Option<usize> {
+	fn current_span_len(&self) -> Option<usize> {
 		None
 	}
-	fn channels(&self) -> u16 {
-		self.channels
+	fn channels(&self) -> ChannelCount {
+		ChannelCount::new(self.channels).expect("channels must be non-zero")
 	}
-	fn sample_rate(&self) -> u32 {
-		self.sample_rate
+	fn sample_rate(&self) -> SampleRate {
+		SampleRate::new(self.sample_rate).expect("sample_rate must be non-zero")
 	}
 	fn total_duration(&self) -> Option<Duration> {
 		None
@@ -749,15 +749,15 @@ where
 	I: Source<Item = f32>,
 	P: Producer<Item = f32>,
 {
-	fn current_frame_len(&self) -> Option<usize> {
-		self.input.current_frame_len()
+	fn current_span_len(&self) -> Option<usize> {
+		self.input.current_span_len()
 	}
 
-	fn channels(&self) -> u16 {
+	fn channels(&self) -> ChannelCount {
 		self.input.channels()
 	}
 
-	fn sample_rate(&self) -> u32 {
+	fn sample_rate(&self) -> SampleRate {
 		self.input.sample_rate()
 	}
 

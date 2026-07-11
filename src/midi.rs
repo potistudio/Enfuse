@@ -10,9 +10,17 @@ const FLX4_KEYWORDS: &[&str] = &["FLX4", "FLX 4", "DDJ"];
 /// FLX4 のポートを探して接続し、受信した生の MIDI メッセージを
 /// `Message::Midi(Vec<u8>)` として流す。
 pub fn listener<Message: 'static + Send>(on_midi: fn(Vec<u8>) -> Message) -> Subscription<Message> {
-	Subscription::run_with_id(
-		"flx4-midi-listener",
-		iced::stream::channel(256, move |mut output| async move {
+	Subscription::run_with(on_midi, midi_stream::<Message>)
+}
+
+fn midi_stream<Message: 'static + Send>(
+	on_midi: &fn(Vec<u8>) -> Message,
+) -> impl iced::futures::Stream<Item = Message> + use<Message> {
+	let on_midi = *on_midi;
+
+	iced::stream::channel(
+		256,
+		move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
 			// midir のコールバックは専用スレッドで同期的に呼ばれるので、
 			// チャンネル経由で async 側へ橋渡しする。
 			let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -33,7 +41,7 @@ pub fn listener<Message: 'static + Send>(on_midi: fn(Vec<u8>) -> Message) -> Sub
 					break;
 				}
 			}
-		}),
+		},
 	)
 }
 

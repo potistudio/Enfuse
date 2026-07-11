@@ -9,7 +9,8 @@ use app::App;
 fn main() -> iced::Result {
 	env_logger::init();
 
-	iced::application("Enfuse", App::update, App::view)
+	iced::application(App::default, App::update, App::view)
+		.title("Enfuse")
 		.subscription(App::subscription)
 		.theme(App::theme)
 		.font(include_bytes!("../assets/fonts/Inter-Regular.ttf").as_slice())
