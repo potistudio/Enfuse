@@ -350,11 +350,7 @@ impl App {
 				self.audio_engine.deck_b.lock().unwrap().toggle_metronome();
 			}
 			Message::Midi(bytes) => {
-				let hex = bytes
-					.iter()
-					.map(|b| format!("{b:02X}"))
-					.collect::<Vec<_>>()
-					.join(" ");
+				let hex = bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ");
 				log::info!("MIDI in: {hex}");
 			}
 		}
@@ -444,7 +440,7 @@ impl App {
 		self.spectrum_display = analysis::compute_spectrum(&mix_buf);
 	}
 
-	pub(super) fn view(&self) -> Element<Message> {
+	pub(super) fn view(&self) -> Element<'_, Message> {
 		let deck_a = self.audio_engine.deck_a.lock().unwrap();
 		let deck_b = self.audio_engine.deck_b.lock().unwrap();
 
@@ -542,14 +538,14 @@ impl App {
 		// --- Wipe Effect Overlay ---
 		let deck_a_final: Element<Message> = if self.wipe_animating_a {
 			let wipe: Element<()> = Element::from(
-				Canvas::new(WipeOverlay { progress: self.wipe_progress_a })
-					.width(Length::Fill)
-					.height(Length::Fill),
+				Canvas::new(WipeOverlay {
+					progress: self.wipe_progress_a,
+				})
+				.width(Length::Fill)
+				.height(Length::Fill),
 			);
 			let wipe = wipe.map(|_| Message::Tick(std::time::Instant::now()));
-			let deck_container = container(deck_a_content)
-				.width(Length::Fill)
-				.height(Length::Fill);
+			let deck_container = container(deck_a_content).width(Length::Fill).height(Length::Fill);
 			stack![deck_container, wipe].into()
 		} else {
 			deck_a_content
@@ -557,14 +553,14 @@ impl App {
 
 		let deck_b_final: Element<Message> = if self.wipe_animating_b {
 			let wipe: Element<()> = Element::from(
-				Canvas::new(WipeOverlay { progress: self.wipe_progress_b })
-					.width(Length::Fill)
-					.height(Length::Fill),
+				Canvas::new(WipeOverlay {
+					progress: self.wipe_progress_b,
+				})
+				.width(Length::Fill)
+				.height(Length::Fill),
 			);
 			let wipe = wipe.map(|_| Message::Tick(std::time::Instant::now()));
-			let deck_container = container(deck_b_content)
-				.width(Length::Fill)
-				.height(Length::Fill);
+			let deck_container = container(deck_b_content).width(Length::Fill).height(Length::Fill);
 			stack![deck_container, wipe].into()
 		} else {
 			deck_b_content
@@ -598,16 +594,26 @@ impl App {
 		let rotation_b = pos_b as f32 * std::f32::consts::PI * 20.0;
 
 		let disc_a: Element<Message> = Element::from(
-			Canvas::new(RotatingDisc::new(rotation_a, deck_a.bpm * deck_a.user_speed, deck_a.is_playing, &self.disc_cache_a))
-				.width(Length::Fixed(160.0))
-				.height(Length::Fixed(160.0)),
+			Canvas::new(RotatingDisc::new(
+				rotation_a,
+				deck_a.bpm * deck_a.user_speed,
+				deck_a.is_playing,
+				&self.disc_cache_a,
+			))
+			.width(Length::Fixed(160.0))
+			.height(Length::Fixed(160.0)),
 		)
 		.map(|_| Message::Tick(std::time::Instant::now()));
 
 		let disc_b: Element<Message> = Element::from(
-			Canvas::new(RotatingDisc::new(rotation_b, deck_b.bpm * deck_b.user_speed, deck_b.is_playing, &self.disc_cache_b))
-				.width(Length::Fixed(160.0))
-				.height(Length::Fixed(160.0)),
+			Canvas::new(RotatingDisc::new(
+				rotation_b,
+				deck_b.bpm * deck_b.user_speed,
+				deck_b.is_playing,
+				&self.disc_cache_b,
+			))
+			.width(Length::Fixed(160.0))
+			.height(Length::Fixed(160.0)),
 		)
 		.map(|_| Message::Tick(std::time::Instant::now()));
 
@@ -646,16 +652,16 @@ impl App {
 
 		// --- Spectrum ---
 		let spectrum: Element<Message> = Element::from(
-			Canvas::new(Spectrum { data: &self.spectrum_display })
-				.width(Length::Fill)
-				.height(Length::Fixed(120.0)),
+			Canvas::new(Spectrum {
+				data: &self.spectrum_display,
+			})
+			.width(Length::Fill)
+			.height(Length::Fixed(120.0)),
 		)
 		.map(|_: ()| Message::Tick(std::time::Instant::now()));
 
 		// --- Layout ---
-		let controls_row = row![deck_a_final, mixer_view, deck_b_final]
-			.padding(20)
-			.spacing(20);
+		let controls_row = row![deck_a_final, mixer_view, deck_b_final].padding(20).spacing(20);
 
 		column![waveform_a, waveform_b, controls_row, spectrum]
 			.spacing(10)
@@ -734,9 +740,7 @@ fn view_deck<'a>(
 	on_metronome: Message,
 ) -> Element<'a, Message> {
 	let play_pause_btn = if deck.is_playing {
-		button("PAUSE")
-			.on_press(on_pause)
-			.style(deck_button_style)
+		button("PAUSE").on_press(on_pause).style(deck_button_style)
 	} else {
 		button("PLAY").on_press(on_play).style(deck_button_style)
 	};
@@ -755,10 +759,7 @@ fn view_deck<'a>(
 			.align_x(iced::Alignment::Center),
 		)
 	} else {
-		button("LOAD TRACK")
-			.on_press(on_load)
-			.style(deck_button_style)
-			.into()
+		button("LOAD TRACK").on_press(on_load).style(deck_button_style).into()
 	};
 
 	let eq_col = |label, val, msg| {
@@ -805,9 +806,13 @@ fn view_deck<'a>(
 			load_content,
 			row![
 				play_pause_btn,
-				button(if deck.metronome_enabled { "METRO ON" } else { "METRO OFF" })
-					.on_press(on_metronome)
-					.style(deck_button_style)
+				button(if deck.metronome_enabled {
+					"METRO ON"
+				} else {
+					"METRO OFF"
+				})
+				.on_press(on_metronome)
+				.style(deck_button_style)
 			]
 			.spacing(8),
 			eq_row,
