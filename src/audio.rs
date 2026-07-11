@@ -1,13 +1,12 @@
 use crate::analysis;
 
 use ringbuf::HeapRb;
-use ringbuf::traits::{Consumer, Producer, Split};
+use ringbuf::traits::{Producer, Split};
 use rodio::*;
-use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,12 +16,13 @@ type RbProducer = <RingBuffer as Split>::Prod;
 #[allow(dead_code)]
 pub type RbConsumer = <RingBuffer as Split>::Cons;
 
+pub const DECK_COUNT: usize = 2;
+
 pub struct AudioEngine {
 	//...
 	_stream: OutputStream,
 	stream_handle: OutputStreamHandle,
-	pub deck_a: Arc<Mutex<Deck>>,
-	pub deck_b: Arc<Mutex<Deck>>,
+	pub decks: Vec<Arc<Mutex<Deck>>>,
 }
 
 impl Default for AudioEngine {
@@ -35,15 +35,14 @@ impl AudioEngine {
 	pub fn new() -> Self {
 		let (_stream, stream_handle) = OutputStream::try_default().unwrap();
 
-		// Create inputs for decks
-		let deck_a = Arc::new(Mutex::new(Deck::new(stream_handle.clone())));
-		let deck_b = Arc::new(Mutex::new(Deck::new(stream_handle.clone())));
+		let decks = (0..DECK_COUNT)
+			.map(|_| Arc::new(Mutex::new(Deck::new(stream_handle.clone()))))
+			.collect();
 
 		Self {
 			_stream,
 			stream_handle,
-			deck_a,
-			deck_b,
+			decks,
 		}
 	}
 }

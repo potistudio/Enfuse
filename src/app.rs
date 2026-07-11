@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::analysis;
-use crate::audio::{self, AudioEngine, Deck, DeckData};
+use crate::audio::{self, AudioEngine, Deck, DeckData, DECK_COUNT};
 use crate::ui::disc::RotatingDisc;
 use crate::ui::spectrum::Spectrum;
 use crate::ui::waveform::{Waveform, WaveformOutput};
@@ -18,94 +18,70 @@ const WIPE_DURATION_SECS: f32 = 0.5;
 const TICK_MS: u64 = 16;
 const BPM_ANIM_DURATION_SECS: f32 = 0.35;
 
-pub(super) struct App {
-	audio_engine: AudioEngine,
-	loading_a: Option<PathBuf>,
-	progress_a: f32,
-	loading_b: Option<PathBuf>,
-	progress_b: f32,
+struct DeckState {
+	volume: f32,
+	loading: Option<PathBuf>,
+	progress: f32,
+	spectrum_buf: VecDeque<f32>,
+	waveform_cache: Cache,
+	zoom_level: f32,
 
-	// Mixer State
-	volume_a: f32,
-	volume_b: f32,
+	// EQ
+	eq_high: f32,
+	eq_mid: f32,
+	eq_low: f32,
+
+	disc_cache: Cache,
+	wipe_progress: f32,
+	wipe_animating: bool,
+
+	// BPM Counter Animation
+	bpm_display: f32,
+	bpm_display_prev: f32,
+	bpm_anim: f32,
+}
+
+impl Default for DeckState {
+	fn default() -> Self {
+		Self {
+			volume: 1.0,
+			loading: None,
+			progress: 0.0,
+			spectrum_buf: VecDeque::with_capacity(2048),
+			waveform_cache: Cache::default(),
+			zoom_level: 1.0,
+
+			eq_high: 0.0,
+			eq_mid: 0.0,
+			eq_low: 0.0,
+
+			disc_cache: Cache::default(),
+			wipe_progress: 0.0,
+			wipe_animating: false,
+
+			bpm_display: 0.0,
+			bpm_display_prev: 0.0,
+			bpm_anim: 1.0,
+		}
+	}
+}
+
+pub(super) struct App {
+	decks: Vec<DeckState>,
+	audio_engine: AudioEngine,
 	crossfader: f32,
 
 	// Spectrum
-	spectrum_buf_a: VecDeque<f32>,
-	spectrum_buf_b: VecDeque<f32>,
 	spectrum_display: Vec<f32>,
-
-	// Waveform Cache
-	waveform_cache_a: Cache,
-	waveform_cache_b: Cache,
-
-	// Zoom
-	zoom_a: f32,
-	zoom_b: f32,
-
-	// EQ
-	high_a: f32,
-	mid_a: f32,
-	low_a: f32,
-	high_b: f32,
-	mid_b: f32,
-	low_b: f32,
-
-	// Disc Cache
-	disc_cache_a: Cache,
-	disc_cache_b: Cache,
-
-	// Wipe Effect
-	wipe_progress_a: f32,
-	wipe_animating_a: bool,
-	wipe_progress_b: f32,
-	wipe_animating_b: bool,
-
-	// BPM Counter Animation
-	bpm_display_a: f32,
-	bpm_display_prev_a: f32,
-	bpm_anim_a: f32,
-	bpm_display_b: f32,
-	bpm_display_prev_b: f32,
-	bpm_anim_b: f32,
 }
 
 impl Default for App {
 	fn default() -> Self {
 		Self {
 			audio_engine: AudioEngine::new(),
-			loading_a: None,
-			progress_a: 0.0,
-			loading_b: None,
-			progress_b: 0.0,
-			volume_a: 1.0,
-			volume_b: 1.0,
 			crossfader: 0.0,
-			spectrum_buf_a: VecDeque::with_capacity(2048),
-			spectrum_buf_b: VecDeque::with_capacity(2048),
 			spectrum_display: Vec::new(),
-			waveform_cache_a: Cache::default(),
-			waveform_cache_b: Cache::default(),
-			zoom_a: 1.0,
-			zoom_b: 1.0,
-			high_a: 0.5,
-			mid_a: 0.5,
-			low_a: 0.5,
-			high_b: 0.5,
-			mid_b: 0.5,
-			low_b: 0.5,
-			disc_cache_a: Cache::default(),
-			disc_cache_b: Cache::default(),
-			wipe_progress_a: 1.0,
-			wipe_animating_a: false,
-			wipe_progress_b: 1.0,
-			wipe_animating_b: false,
-			bpm_display_a: 0.0,
-			bpm_display_prev_a: 0.0,
-			bpm_anim_a: 1.0,
-			bpm_display_b: 0.0,
-			bpm_display_prev_b: 0.0,
-			bpm_anim_b: 1.0,
+			decks: (0..DECK_COUNT).map(|_| DeckState::default()).collect(),
 		}
 	}
 }
@@ -113,43 +89,29 @@ impl Default for App {
 #[derive(Debug, Clone)]
 pub(super) enum Message {
 	Tick(std::time::Instant),
-	DeckAPlay,
-	DeckAPause,
-	DeckALoad,
-	DeckAProgress(f32),
-	DeckALoaded(Result<DeckData, String>),
-	DeckASpeed(f32),
-	DeckBPlay,
-	DeckBPause,
-	DeckBLoad,
-	DeckBProgress(f32),
-	DeckBLoaded(Result<DeckData, String>),
-	DeckBSpeed(f32),
-	DeckAZoom(f32),
-	DeckBZoom(f32),
+	DeckPlay(usize),
+	DeckPause(usize),
+	DeckLoad(usize),
+	DeckProgress(usize, f32),
+	DeckLoaded(usize, Result<DeckData, String>),
+	DeckSpeed(usize, f32),
+	DeckZoom(usize, f32),
 
 	// EQ
-	DeckAHigh(f32),
-	DeckAMid(f32),
-	DeckALow(f32),
-	DeckBHigh(f32),
-	DeckBMid(f32),
-	DeckBLow(f32),
+	DeckHigh(usize, f32),
+	DeckMid(usize, f32),
+	DeckLow(usize, f32),
 
 	// Mixer
-	VolumeAChanged(f32),
-	VolumeBChanged(f32),
+	VolumeChanged(usize, f32),
 	CrossfaderChanged(f32),
 
 	// Seek & Scratch
-	DeckASeek(f32),
-	DeckBSeek(f32),
-	DeckAScratch(f32),
-	DeckBScratch(f32),
+	DeckSeek(usize, f32),
+	DeckScratch(usize, f32),
 
 	// Metronome
-	DeckAMetronome,
-	DeckBMetronome,
+	DeckMetronome(usize),
 
 	// MIDI (FLX4)
 	Midi(Vec<u8>),
@@ -169,17 +131,18 @@ impl App {
 		)
 	}
 
+	// Deck 0 is the "A" side, Deck 1 is the "B" side of the crossfader.
 	fn apply_volumes(&self) {
-		let mut deck_a = self.audio_engine.deck_a.lock().unwrap();
-		let mut deck_b = self.audio_engine.deck_b.lock().unwrap();
+		let mut deck_a = self.audio_engine.decks[0].lock().unwrap();
+		let mut deck_b = self.audio_engine.decks[1].lock().unwrap();
 
-		let vol_a = self.volume_a
+		let vol_a = self.decks[0].volume
 			* if self.crossfader > 0.0 {
 				1.0 - self.crossfader
 			} else {
 				1.0
 			};
-		let vol_b = self.volume_b
+		let vol_b = self.decks[1].volume
 			* if self.crossfader < 0.0 {
 				1.0 + self.crossfader
 			} else {
@@ -191,26 +154,26 @@ impl App {
 	}
 
 	pub(super) fn subscription(&self) -> Subscription<Message> {
-		let sub_a = if let Some(path) = &self.loading_a {
-			track_loader(0, path.clone())
-		} else {
-			Subscription::none()
-		};
+		let mut subs: Vec<Subscription<Message>> = self
+			.decks
+			.iter()
+			.enumerate()
+			.map(|(id, state)| {
+				if let Some(path) = &state.loading {
+					track_loader(id, path.clone())
+				} else {
+					Subscription::none()
+				}
+			})
+			.collect();
 
-		let sub_b = if let Some(path) = &self.loading_b {
-			track_loader(1, path.clone())
-		} else {
-			Subscription::none()
-		};
-
-		let is_playing = {
-			let a = self.audio_engine.deck_a.lock().unwrap().is_playing;
-			let b = self.audio_engine.deck_b.lock().unwrap().is_playing;
-			a || b
-		};
-
-		let wipe_active = self.wipe_animating_a || self.wipe_animating_b;
-		let bpm_anim_active = self.bpm_anim_a < 1.0 || self.bpm_anim_b < 1.0;
+		let is_playing = self
+			.audio_engine
+			.decks
+			.iter()
+			.any(|deck| deck.lock().unwrap().is_playing);
+		let wipe_active = self.decks.iter().any(|state| state.wipe_animating);
+		let bpm_anim_active = self.decks.iter().any(|state| state.bpm_anim < 1.0);
 
 		let time_sub = if is_playing || wipe_active || bpm_anim_active {
 			iced::time::every(std::time::Duration::from_millis(TICK_MS)).map(Message::Tick)
@@ -218,9 +181,10 @@ impl App {
 			Subscription::none()
 		};
 
-		let midi_sub = crate::midi::listener(Message::Midi);
+		subs.push(time_sub);
+		subs.push(crate::midi::listener(Message::Midi));
 
-		Subscription::batch(vec![sub_a, sub_b, time_sub, midi_sub])
+		Subscription::batch(subs)
 	}
 
 	pub(super) fn update(&mut self, message: Message) -> Task<Message> {
@@ -229,158 +193,86 @@ impl App {
 				self.tick_wipe();
 				self.tick_spectrum();
 				self.tick_bpm_anim();
-				self.audio_engine.deck_a.lock().unwrap().tick_metronome();
-				self.audio_engine.deck_b.lock().unwrap().tick_metronome();
+				for deck in &self.audio_engine.decks {
+					deck.lock().unwrap().tick_metronome();
+				}
 			}
-			Message::VolumeAChanged(v) => {
-				self.volume_a = v;
-				self.apply_volumes();
-			}
-			Message::VolumeBChanged(v) => {
-				self.volume_b = v;
+			Message::VolumeChanged(id, v) => {
+				self.decks[id].volume = v;
 				self.apply_volumes();
 			}
 			Message::CrossfaderChanged(v) => {
 				self.crossfader = v;
 				self.apply_volumes();
 			}
-			Message::DeckAPlay => {
-				self.audio_engine.deck_a.lock().unwrap().play();
+			Message::DeckPlay(id) => {
+				self.audio_engine.decks[id].lock().unwrap().play();
 			}
-			Message::DeckAPause => {
-				self.audio_engine.deck_a.lock().unwrap().pause();
+			Message::DeckPause(id) => {
+				self.audio_engine.decks[id].lock().unwrap().pause();
 			}
-			Message::DeckALoad => {
-				if self.loading_a.is_none() {
+			Message::DeckLoad(id) => {
+				if self.decks[id].loading.is_none() {
 					if let Some(path) = rfd::FileDialog::new().pick_file() {
-						self.loading_a = Some(path);
-						self.progress_a = 0.0;
+						self.decks[id].loading = Some(path);
+						self.decks[id].progress = 0.0;
 					}
 				}
 			}
-			Message::DeckAProgress(p) => {
-				self.progress_a = p;
+			Message::DeckProgress(id, p) => {
+				self.decks[id].progress = p;
 			}
-			Message::DeckALoaded(result) => {
-				self.loading_a = None;
+			Message::DeckLoaded(id, result) => {
+				self.decks[id].loading = None;
 				match result {
 					Ok(data) => {
-						let mut deck = self.audio_engine.deck_a.lock().unwrap();
+						let mut deck = self.audio_engine.decks[id].lock().unwrap();
 						deck.load_data(data);
 						deck.play();
 					}
 					Err(e) => {
-						log::error!("Error loading track A: {}", e);
+						log::error!("Error loading track {}: {}", id, e);
 					}
 				}
 				self.apply_volumes();
-				self.start_wipe_a();
-				let deck = self.audio_engine.deck_a.lock().unwrap();
+				self.start_wipe(id);
+				let deck = self.audio_engine.decks[id].lock().unwrap();
 				let effective_bpm = deck.bpm * deck.user_speed;
 				drop(deck);
-				self.set_bpm_display_a(effective_bpm);
+				self.set_bpm_display(id, effective_bpm);
 			}
-			Message::DeckASpeed(speed) => {
-				let mut deck = self.audio_engine.deck_a.lock().unwrap();
+			Message::DeckSpeed(id, speed) => {
+				let mut deck = self.audio_engine.decks[id].lock().unwrap();
 				deck.set_speed(speed);
 				let effective_bpm = deck.bpm * deck.user_speed;
 				drop(deck);
-				self.set_bpm_display_a(effective_bpm);
+				self.set_bpm_display(id, effective_bpm);
 			}
-			Message::DeckBPlay => {
-				self.audio_engine.deck_b.lock().unwrap().play();
-			}
-			Message::DeckBPause => {
-				self.audio_engine.deck_b.lock().unwrap().pause();
-			}
-			Message::DeckBLoad => {
-				if self.loading_b.is_none() {
-					if let Some(path) = rfd::FileDialog::new().pick_file() {
-						self.loading_b = Some(path);
-						self.progress_b = 0.0;
-					}
-				}
-			}
-			Message::DeckBProgress(p) => {
-				self.progress_b = p;
-			}
-			Message::DeckBLoaded(result) => {
-				self.loading_b = None;
-				match result {
-					Ok(data) => {
-						let mut deck = self.audio_engine.deck_b.lock().unwrap();
-						deck.load_data(data);
-						deck.play();
-					}
-					Err(e) => {
-						log::error!("Error loading track B: {}", e);
-					}
-				}
-				self.apply_volumes();
-				self.start_wipe_b();
-				let deck = self.audio_engine.deck_b.lock().unwrap();
-				let effective_bpm = deck.bpm * deck.user_speed;
-				drop(deck);
-				self.set_bpm_display_b(effective_bpm);
-			}
-			Message::DeckBSpeed(speed) => {
-				let mut deck = self.audio_engine.deck_b.lock().unwrap();
-				deck.set_speed(speed);
-				let effective_bpm = deck.bpm * deck.user_speed;
-				drop(deck);
-				self.set_bpm_display_b(effective_bpm);
-			}
-			Message::DeckASeek(p) => {
-				let mut deck = self.audio_engine.deck_a.lock().unwrap();
+			Message::DeckSeek(id, p) => {
+				let mut deck = self.audio_engine.decks[id].lock().unwrap();
 				let dur = deck.duration.as_secs_f64() * p as f64;
 				deck.seek_to(std::time::Duration::from_secs_f64(dur));
 			}
-			Message::DeckBSeek(p) => {
-				let mut deck = self.audio_engine.deck_b.lock().unwrap();
-				let dur = deck.duration.as_secs_f64() * p as f64;
-				deck.seek_to(std::time::Duration::from_secs_f64(dur));
+			Message::DeckScratch(id, v) => {
+				self.audio_engine.decks[id].lock().unwrap().set_scratch_speed(v);
 			}
-			Message::DeckAScratch(v) => {
-				self.audio_engine.deck_a.lock().unwrap().set_scratch_speed(v);
+			Message::DeckZoom(id, z) => {
+				self.decks[id].zoom_level = z;
 			}
-			Message::DeckBScratch(v) => {
-				self.audio_engine.deck_b.lock().unwrap().set_scratch_speed(v);
+			Message::DeckHigh(id, v) => {
+				self.decks[id].eq_high = v;
+				self.audio_engine.decks[id].lock().unwrap().set_high(v);
 			}
-			Message::DeckAZoom(z) => {
-				self.zoom_a = z;
+			Message::DeckMid(id, v) => {
+				self.decks[id].eq_mid = v;
+				self.audio_engine.decks[id].lock().unwrap().set_mid(v);
 			}
-			Message::DeckBZoom(z) => {
-				self.zoom_b = z;
+			Message::DeckLow(id, v) => {
+				self.decks[id].eq_low = v;
+				self.audio_engine.decks[id].lock().unwrap().set_low(v);
 			}
-			Message::DeckAHigh(v) => {
-				self.high_a = v;
-				self.audio_engine.deck_a.lock().unwrap().set_high(v);
-			}
-			Message::DeckAMid(v) => {
-				self.mid_a = v;
-				self.audio_engine.deck_a.lock().unwrap().set_mid(v);
-			}
-			Message::DeckALow(v) => {
-				self.low_a = v;
-				self.audio_engine.deck_a.lock().unwrap().set_low(v);
-			}
-			Message::DeckBHigh(v) => {
-				self.high_b = v;
-				self.audio_engine.deck_b.lock().unwrap().set_high(v);
-			}
-			Message::DeckBMid(v) => {
-				self.mid_b = v;
-				self.audio_engine.deck_b.lock().unwrap().set_mid(v);
-			}
-			Message::DeckBLow(v) => {
-				self.low_b = v;
-				self.audio_engine.deck_b.lock().unwrap().set_low(v);
-			}
-			Message::DeckAMetronome => {
-				self.audio_engine.deck_a.lock().unwrap().toggle_metronome();
-			}
-			Message::DeckBMetronome => {
-				self.audio_engine.deck_b.lock().unwrap().toggle_metronome();
+			Message::DeckMetronome(id) => {
+				self.audio_engine.decks[id].lock().unwrap().toggle_metronome();
 			}
 			Message::Midi(bytes) => {
 				let hex = bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ");
@@ -390,56 +282,38 @@ impl App {
 		Task::none()
 	}
 
-	fn start_wipe_a(&mut self) {
-		self.wipe_progress_a = 0.0;
-		self.wipe_animating_a = true;
+	fn start_wipe(&mut self, id: usize) {
+		self.decks[id].wipe_progress = 0.0;
+		self.decks[id].wipe_animating = true;
 	}
 
-	fn start_wipe_b(&mut self) {
-		self.wipe_progress_b = 0.0;
-		self.wipe_animating_b = true;
-	}
-
-	fn set_bpm_display_a(&mut self, value: f32) {
-		if (self.bpm_display_a - value).abs() > 0.05 {
-			self.bpm_display_prev_a = self.bpm_display_a;
-			self.bpm_display_a = value;
-			self.bpm_anim_a = 0.0;
-		}
-	}
-
-	fn set_bpm_display_b(&mut self, value: f32) {
-		if (self.bpm_display_b - value).abs() > 0.05 {
-			self.bpm_display_prev_b = self.bpm_display_b;
-			self.bpm_display_b = value;
-			self.bpm_anim_b = 0.0;
+	fn set_bpm_display(&mut self, id: usize, value: f32) {
+		let state = &mut self.decks[id];
+		if (state.bpm_display - value).abs() > 0.05 {
+			state.bpm_display_prev = state.bpm_display;
+			state.bpm_display = value;
+			state.bpm_anim = 0.0;
 		}
 	}
 
 	fn tick_bpm_anim(&mut self) {
 		let step = TICK_MS as f32 / 1000.0 / BPM_ANIM_DURATION_SECS;
-		if self.bpm_anim_a < 1.0 {
-			self.bpm_anim_a = (self.bpm_anim_a + step).min(1.0);
-		}
-		if self.bpm_anim_b < 1.0 {
-			self.bpm_anim_b = (self.bpm_anim_b + step).min(1.0);
+		for state in &mut self.decks {
+			if state.bpm_anim < 1.0 {
+				state.bpm_anim = (state.bpm_anim + step).min(1.0);
+			}
 		}
 	}
 
 	fn tick_wipe(&mut self) {
 		let dt = TICK_MS as f32 / 1000.0;
-		if self.wipe_animating_a {
-			self.wipe_progress_a += dt / WIPE_DURATION_SECS;
-			if self.wipe_progress_a >= 1.0 {
-				self.wipe_progress_a = 1.0;
-				self.wipe_animating_a = false;
-			}
-		}
-		if self.wipe_animating_b {
-			self.wipe_progress_b += dt / WIPE_DURATION_SECS;
-			if self.wipe_progress_b >= 1.0 {
-				self.wipe_progress_b = 1.0;
-				self.wipe_animating_b = false;
+		for state in &mut self.decks {
+			if state.wipe_animating {
+				state.wipe_progress += dt / WIPE_DURATION_SECS;
+				if state.wipe_progress >= 1.0 {
+					state.wipe_progress = 1.0;
+					state.wipe_animating = false;
+				}
 			}
 		}
 	}
@@ -455,44 +329,31 @@ impl App {
 			}
 		};
 
-		fetch_deck(&self.audio_engine.deck_a, &mut self.spectrum_buf_a);
-		fetch_deck(&self.audio_engine.deck_b, &mut self.spectrum_buf_b);
-
-		while self.spectrum_buf_a.len() > 2048 {
-			self.spectrum_buf_a.pop_front();
-		}
-		while self.spectrum_buf_b.len() > 2048 {
-			self.spectrum_buf_b.pop_front();
+		for (id, deck) in self.audio_engine.decks.iter().enumerate() {
+			fetch_deck(deck, &mut self.decks[id].spectrum_buf);
+			while self.decks[id].spectrum_buf.len() > 2048 {
+				self.decks[id].spectrum_buf.pop_front();
+			}
 		}
 
 		let window_size = 1024;
 		let mut mix_buf = vec![0.0; window_size];
 
-		let (vol_a_mult, vol_b_mult) = {
-			let mut va = self.volume_a;
-			let mut vb = self.volume_b;
-			if self.crossfader > 0.0 {
-				va *= 1.0 - self.crossfader;
+		// Deck 0 ("A") is attenuated on the positive crossfader side, deck 1 ("B") on the negative side.
+		for (id, state) in self.decks.iter().enumerate() {
+			let mut vol_mult = state.volume;
+			if id == 0 && self.crossfader > 0.0 {
+				vol_mult *= 1.0 - self.crossfader;
+			} else if id == 1 && self.crossfader < 0.0 {
+				vol_mult *= 1.0 + self.crossfader;
 			}
-			if self.crossfader < 0.0 {
-				vb *= 1.0 + self.crossfader;
-			}
-			(va, vb)
-		};
 
-		let len_a = self.spectrum_buf_a.len();
-		let start_a = len_a.saturating_sub(window_size);
-		for (i, sample) in self.spectrum_buf_a.iter().skip(start_a).take(window_size).enumerate() {
-			if i < mix_buf.len() {
-				mix_buf[i] += sample * vol_a_mult;
-			}
-		}
-
-		let len_b = self.spectrum_buf_b.len();
-		let start_b = len_b.saturating_sub(window_size);
-		for (i, sample) in self.spectrum_buf_b.iter().skip(start_b).take(window_size).enumerate() {
-			if i < mix_buf.len() {
-				mix_buf[i] += sample * vol_b_mult;
+			let len = state.spectrum_buf.len();
+			let start = len.saturating_sub(window_size);
+			for (i, sample) in state.spectrum_buf.iter().skip(start).take(window_size).enumerate() {
+				if i < mix_buf.len() {
+					mix_buf[i] += sample * vol_mult;
+				}
 			}
 		}
 
@@ -500,210 +361,109 @@ impl App {
 	}
 
 	pub(super) fn view(&self) -> Element<'_, Message> {
-		let deck_a = self.audio_engine.deck_a.lock().unwrap();
-		let deck_b = self.audio_engine.deck_b.lock().unwrap();
+		let deck_guards: Vec<_> = self.audio_engine.decks.iter().map(|d| d.lock().unwrap()).collect();
 
-		// --- Deck A Waveform ---
-		let pos_a = if deck_a.duration.as_secs_f64() > 0.0 {
-			deck_a.get_position().as_secs_f64() / deck_a.duration.as_secs_f64()
-		} else {
-			0.0
-		};
+		let build_deck = |id: usize| -> (Element<'_, Message>, Element<'_, Message>, Element<'_, Message>) {
+			let deck = &deck_guards[id];
+			let state = &self.decks[id];
 
-		let waveform_a: Element<WaveformOutput> = Element::from(
-			Canvas::new(Waveform::new(
-				&deck_a.waveform,
-				pos_a as f32,
-				deck_a.bpm,
-				deck_a.beat_offset,
-				44100,
-				self.zoom_a,
-				&self.waveform_cache_a,
-			))
-			.width(Length::Fill)
-			.height(Length::Fixed(100.0)),
-		);
-		let waveform_a: Element<Message> = waveform_a.map(|out| match out {
-			WaveformOutput::Seek(p) => Message::DeckASeek(p),
-			WaveformOutput::Scratch(v) => Message::DeckAScratch(v),
-			WaveformOutput::Zoom(z) => Message::DeckAZoom(z),
-			WaveformOutput::Released => Message::DeckAScratch(1.0),
-		});
+			let pos = if deck.duration.as_secs_f64() > 0.0 {
+				deck.get_position().as_secs_f64() / deck.duration.as_secs_f64()
+			} else {
+				0.0
+			};
 
-		// --- Deck B Waveform ---
-		let pos_b = if deck_b.duration.as_secs_f64() > 0.0 {
-			deck_b.get_position().as_secs_f64() / deck_b.duration.as_secs_f64()
-		} else {
-			0.0
-		};
-
-		let waveform_b: Element<WaveformOutput> = Element::from(
-			Canvas::new(Waveform::new(
-				&deck_b.waveform,
-				pos_b as f32,
-				deck_b.bpm,
-				deck_b.beat_offset,
-				44100,
-				self.zoom_b,
-				&self.waveform_cache_b,
-			))
-			.width(Length::Fill)
-			.height(Length::Fixed(100.0)),
-		);
-		let waveform_b: Element<Message> = waveform_b.map(|out| match out {
-			WaveformOutput::Seek(p) => Message::DeckBSeek(p),
-			WaveformOutput::Scratch(v) => Message::DeckBScratch(v),
-			WaveformOutput::Zoom(z) => Message::DeckBZoom(z),
-			WaveformOutput::Released => Message::DeckBScratch(1.0),
-		});
-
-		// --- Deck Controls ---
-		let deck_a_content = view_deck(
-			"DECK A",
-			&deck_a,
-			self.loading_a.is_some(),
-			self.progress_a,
-			Message::DeckAPlay,
-			Message::DeckAPause,
-			Message::DeckALoad,
-			Message::DeckASpeed,
-			self.high_a,
-			self.mid_a,
-			self.low_a,
-			Message::DeckAHigh,
-			Message::DeckAMid,
-			Message::DeckALow,
-			Message::DeckAMetronome,
-		);
-
-		let deck_b_content = view_deck(
-			"DECK B",
-			&deck_b,
-			self.loading_b.is_some(),
-			self.progress_b,
-			Message::DeckBPlay,
-			Message::DeckBPause,
-			Message::DeckBLoad,
-			Message::DeckBSpeed,
-			self.high_b,
-			self.mid_b,
-			self.low_b,
-			Message::DeckBHigh,
-			Message::DeckBMid,
-			Message::DeckBLow,
-			Message::DeckBMetronome,
-		);
-
-		// --- Wipe Effect Overlay ---
-		let deck_a_final: Element<Message> = if self.wipe_animating_a {
-			let wipe: Element<()> = Element::from(
-				Canvas::new(WipeOverlay {
-					progress: self.wipe_progress_a,
-				})
+			let waveform: Element<WaveformOutput> = Element::from(
+				Canvas::new(Waveform::new(
+					&deck.waveform,
+					pos as f32,
+					deck.bpm,
+					deck.beat_offset,
+					44100,
+					state.zoom_level,
+					&state.waveform_cache,
+				))
 				.width(Length::Fill)
-				.height(Length::Fill),
+				.height(Length::Fixed(100.0)),
 			);
-			let wipe = wipe.map(|_| Message::Tick(std::time::Instant::now()));
-			let deck_container = container(deck_a_content).width(Length::Fill).height(Length::Fill);
-			stack![deck_container, wipe].into()
-		} else {
-			deck_a_content
+			let waveform: Element<Message> = waveform.map(move |out| match out {
+				WaveformOutput::Seek(p) => Message::DeckSeek(id, p),
+				WaveformOutput::Scratch(v) => Message::DeckScratch(id, v),
+				WaveformOutput::Zoom(z) => Message::DeckZoom(id, z),
+				WaveformOutput::Released => Message::DeckScratch(id, 1.0),
+			});
+
+			let deck_content = view_deck(id, deck, state);
+
+			let deck_final: Element<Message> = if state.wipe_animating {
+				let wipe: Element<()> = Element::from(
+					Canvas::new(WipeOverlay {
+						progress: state.wipe_progress,
+					})
+					.width(Length::Fill)
+					.height(Length::Fill),
+				);
+				let wipe = wipe.map(|_| Message::Tick(std::time::Instant::now()));
+				let deck_container = container(deck_content).width(Length::Fill).height(Length::Fill);
+				stack![deck_container, wipe].into()
+			} else {
+				deck_content
+			};
+
+			let rotation = pos as f32 * std::f32::consts::PI * 20.0;
+			let disc: Element<Message> = Element::from(
+				Canvas::new(RotatingDisc::new(
+					rotation,
+					state.bpm_display_prev,
+					state.bpm_display,
+					state.bpm_anim,
+					deck.is_playing,
+					&state.disc_cache,
+				))
+				.width(Length::Fixed(160.0))
+				.height(Length::Fixed(160.0)),
+			)
+			.map(|_| Message::Tick(std::time::Instant::now()));
+
+			(waveform, deck_final, disc)
 		};
 
-		let deck_b_final: Element<Message> = if self.wipe_animating_b {
-			let wipe: Element<()> = Element::from(
-				Canvas::new(WipeOverlay {
-					progress: self.wipe_progress_b,
-				})
-				.width(Length::Fill)
-				.height(Length::Fill),
-			);
-			let wipe = wipe.map(|_| Message::Tick(std::time::Instant::now()));
-			let deck_container = container(deck_b_content).width(Length::Fill).height(Length::Fill);
-			stack![deck_container, wipe].into()
-		} else {
-			deck_b_content
-		};
+		let (waveform_a, deck_a_final, disc_a) = build_deck(0);
+		let (waveform_b, deck_b_final, disc_b) = build_deck(1);
 
 		// --- Mixer ---
-		let fader_a = container(
-			vertical_slider(0.0..=1.0, self.volume_a, Message::VolumeAChanged)
-				.step(0.01)
-				.width(26.0)
-				.height(150)
-				.style(fader_style),
-		)
-		.padding([12, 16])
-		.style(fader_track_style);
-		let fader_b = container(
-			vertical_slider(0.0..=1.0, self.volume_b, Message::VolumeBChanged)
-				.step(0.01)
-				.width(26.0)
-				.height(150)
-				.style(fader_style),
-		)
-		.padding([12, 16])
-		.style(fader_track_style);
+		let fader = |id: usize| {
+			container(
+				vertical_slider(0.0..=1.0, self.decks[id].volume, move |v| Message::VolumeChanged(id, v))
+					.step(0.01)
+					.width(26.0)
+					.height(150)
+					.style(fader_style),
+			)
+			.padding([12, 16])
+			.style(fader_track_style)
+		};
+
+		let vol_col = |id: usize, label: &'static str| {
+			column![
+				text(label).size(10).color(Color::from_rgb8(160, 160, 160)),
+				fader(id),
+				text(format!("{:.0}%", self.decks[id].volume * 100.0))
+					.size(11)
+					.color(Color::from_rgb8(140, 140, 140))
+			]
+			.spacing(8)
+			.align_x(iced::Alignment::Center)
+		};
+
 		let crossfader = slider(-1.0..=1.0, self.crossfader, Message::CrossfaderChanged)
 			.step(0.01)
 			.style(slider_style);
 
-		// --- Rotating Discs ---
-		let rotation_a = pos_a as f32 * std::f32::consts::PI * 20.0;
-		let rotation_b = pos_b as f32 * std::f32::consts::PI * 20.0;
-
-		let disc_a: Element<Message> = Element::from(
-			Canvas::new(RotatingDisc::new(
-				rotation_a,
-				self.bpm_display_prev_a,
-				self.bpm_display_a,
-				self.bpm_anim_a,
-				deck_a.is_playing,
-				&self.disc_cache_a,
-			))
-			.width(Length::Fixed(160.0))
-			.height(Length::Fixed(160.0)),
-		)
-		.map(|_| Message::Tick(std::time::Instant::now()));
-
-		let disc_b: Element<Message> = Element::from(
-			Canvas::new(RotatingDisc::new(
-				rotation_b,
-				self.bpm_display_prev_b,
-				self.bpm_display_b,
-				self.bpm_anim_b,
-				deck_b.is_playing,
-				&self.disc_cache_b,
-			))
-			.width(Length::Fixed(160.0))
-			.height(Length::Fixed(160.0)),
-		)
-		.map(|_| Message::Tick(std::time::Instant::now()));
-
-		let vol_a_col = column![
-			text("VOL A").size(10).color(Color::from_rgb8(160, 160, 160)),
-			fader_a,
-			text(format!("{:.0}%", self.volume_a * 100.0))
-				.size(11)
-				.color(Color::from_rgb8(140, 140, 140))
-		]
-		.spacing(8)
-		.align_x(iced::Alignment::Center);
-
-		let vol_b_col = column![
-			text("VOL B").size(10).color(Color::from_rgb8(160, 160, 160)),
-			fader_b,
-			text(format!("{:.0}%", self.volume_b * 100.0))
-				.size(11)
-				.color(Color::from_rgb8(140, 140, 140))
-		]
-		.spacing(8)
-		.align_x(iced::Alignment::Center);
-
 		let mixer_view = column![
 			row![
-				row![disc_a, vol_a_col].spacing(8).align_y(iced::Alignment::Center),
-				row![vol_b_col, disc_b].spacing(8).align_y(iced::Alignment::Center)
+				row![disc_a, vol_col(0, "VOL A")].spacing(8).align_y(iced::Alignment::Center),
+				row![vol_col(1, "VOL B"), disc_b].spacing(8).align_y(iced::Alignment::Center)
 			]
 			.spacing(30),
 			text("CROSSFADER").size(10),
@@ -734,7 +494,7 @@ impl App {
 
 // --- Track Loader Subscription ---
 
-fn track_loader(deck_id: u8, path: PathBuf) -> Subscription<Message> {
+fn track_loader(deck_id: usize, path: PathBuf) -> Subscription<Message> {
 	Subscription::run_with_id(
 		(deck_id, path.clone()),
 		iced::stream::channel(100, move |mut output| async move {
@@ -751,22 +511,10 @@ fn track_loader(deck_id: u8, path: PathBuf) -> Subscription<Message> {
 				if let Some(msg) = rx_internal.recv().await {
 					match msg {
 						InternalState::Progress(p) => {
-							let _ = output
-								.send(if deck_id == 0 {
-									Message::DeckAProgress(p)
-								} else {
-									Message::DeckBProgress(p)
-								})
-								.await;
+							let _ = output.send(Message::DeckProgress(deck_id, p)).await;
 						}
 						InternalState::Finished(res) => {
-							let _ = output
-								.send(if deck_id == 0 {
-									Message::DeckALoaded(res)
-								} else {
-									Message::DeckBLoaded(res)
-								})
-								.await;
+							let _ = output.send(Message::DeckLoaded(deck_id, res)).await;
 							break;
 						}
 					}
@@ -785,50 +533,39 @@ enum InternalState {
 
 // --- Deck View ---
 
-fn view_deck<'a>(
-	title: &'a str,
-	deck: &Deck,
-	is_loading: bool,
-	progress: f32,
-	on_play: Message,
-	on_pause: Message,
-	on_load: Message,
-	on_speed: fn(f32) -> Message,
-	high: f32,
-	mid: f32,
-	low: f32,
-	on_high: fn(f32) -> Message,
-	on_mid: fn(f32) -> Message,
-	on_low: fn(f32) -> Message,
-	on_metronome: Message,
-) -> Element<'a, Message> {
+fn view_deck<'a>(id: usize, deck: &Deck, state: &'a DeckState) -> Element<'a, Message> {
+	let title = if id == 0 { "DECK A" } else { "DECK B" };
+
 	let play_pause_btn = if deck.is_playing {
-		button("PAUSE").on_press(on_pause).style(deck_button_style)
+		button("PAUSE").on_press(Message::DeckPause(id)).style(deck_button_style)
 	} else {
-		button("PLAY").on_press(on_play).style(deck_button_style)
+		button("PLAY").on_press(Message::DeckPlay(id)).style(deck_button_style)
 	};
 
-	let speed_slider = slider::<f32, Message, Theme>(0.5..=1.5, deck.user_speed, on_speed)
+	let speed_slider = slider::<f32, Message, Theme>(0.5..=1.5, deck.user_speed, move |v| Message::DeckSpeed(id, v))
 		.step(0.01)
 		.style(slider_style);
 
-	let load_content: Element<'a, Message> = if is_loading {
+	let load_content: Element<'a, Message> = if state.loading.is_some() {
 		Element::from(
 			column![
 				text("ANALYZING...").size(12),
-				progress_bar::<Theme>(0.0..=1.0, progress).height(8)
+				progress_bar::<Theme>(0.0..=1.0, state.progress).height(8)
 			]
 			.spacing(4)
 			.align_x(iced::Alignment::Center),
 		)
 	} else {
-		button("LOAD TRACK").on_press(on_load).style(deck_button_style).into()
+		button("LOAD TRACK")
+			.on_press(Message::DeckLoad(id))
+			.style(deck_button_style)
+			.into()
 	};
 
-	let eq_col = |label, val, msg| {
+	let eq_col = move |label: &'static str, val: f32, ctor: fn(usize, f32) -> Message| {
 		column![
 			text(label).size(10).color(Color::from_rgb8(160, 160, 160)),
-			vertical_slider(0.0..=1.0, val, msg)
+			vertical_slider(0.0..=1.0, val, move |v| ctor(id, v))
 				.step(0.01)
 				.height(80)
 				.style(eq_slider_style)
@@ -837,13 +574,13 @@ fn view_deck<'a>(
 	};
 
 	let eq_row = row![
-		eq_col("HI", high, on_high),
-		eq_col("MID", mid, on_mid),
-		eq_col("LO", low, on_low)
+		eq_col("HI", state.eq_high, Message::DeckHigh),
+		eq_col("MID", state.eq_mid, Message::DeckMid),
+		eq_col("LO", state.eq_low, Message::DeckLow)
 	]
 	.spacing(12);
 
-	let status_text = if is_loading {
+	let status_text = if state.loading.is_some() {
 		"Loading..."
 	} else if deck.is_playing {
 		"Playing"
@@ -874,7 +611,7 @@ fn view_deck<'a>(
 				} else {
 					"METRO OFF"
 				})
-				.on_press(on_metronome)
+				.on_press(Message::DeckMetronome(id))
 				.style(deck_button_style)
 			]
 			.spacing(8),
