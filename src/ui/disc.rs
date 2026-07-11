@@ -68,28 +68,6 @@ impl<'a> canvas::Program<()> for RotatingDisc<'a> {
 			let hole = Path::circle(center, hole_radius);
 			frame.fill(&hole, Color::BLACK);
 
-			// BPM表示
-			if self.bpm > 0.0 {
-				frame.fill_text(canvas::Text {
-					content: format!("{:.0}", self.bpm),
-					position: Point::new(center.x, center.y - label_radius * 0.25),
-					color: Color::WHITE,
-					size: iced::Pixels(label_radius * 0.75),
-					horizontal_alignment: iced::alignment::Horizontal::Center,
-					vertical_alignment: iced::alignment::Vertical::Center,
-					..canvas::Text::default()
-				});
-				frame.fill_text(canvas::Text {
-					content: "BPM".to_string(),
-					position: Point::new(center.x, center.y + label_radius * 0.55),
-					color: Color::from_rgba(1.0, 1.0, 1.0, 0.7),
-					size: iced::Pixels(label_radius * 0.3),
-					horizontal_alignment: iced::alignment::Horizontal::Center,
-					vertical_alignment: iced::alignment::Vertical::Center,
-					..canvas::Text::default()
-				});
-			}
-
 			// 回転マーカー（ラベル上）
 			let marker_angles = [
 				self.rotation * 10.0,
@@ -119,6 +97,32 @@ impl<'a> canvas::Program<()> for RotatingDisc<'a> {
 						..canvas::Stroke::default()
 					},
 				);
+			}
+
+			// BPM表示（マーカーより手前に描画して被らないようにする）
+			if self.bpm > 0.0 {
+				let label_bg = Path::circle(center, label_radius);
+				frame.fill(&label_bg, LABEL_COLOR);
+				frame.fill(&hole, Color::BLACK);
+
+				frame.fill_text(canvas::Text {
+					content: format!("{:.0}", self.bpm),
+					position: Point::new(center.x, center.y - label_radius * 0.25),
+					color: Color::WHITE,
+					size: iced::Pixels(label_radius * 0.75),
+					horizontal_alignment: iced::alignment::Horizontal::Center,
+					vertical_alignment: iced::alignment::Vertical::Center,
+					..canvas::Text::default()
+				});
+				frame.fill_text(canvas::Text {
+					content: "BPM".to_string(),
+					position: Point::new(center.x, center.y + label_radius * 0.55),
+					color: Color::from_rgba(1.0, 1.0, 1.0, 0.7),
+					size: iced::Pixels(label_radius * 0.3),
+					horizontal_alignment: iced::alignment::Horizontal::Center,
+					vertical_alignment: iced::alignment::Vertical::Center,
+					..canvas::Text::default()
+				});
 			}
 		});
 
