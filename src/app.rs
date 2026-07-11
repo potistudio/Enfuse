@@ -598,16 +598,16 @@ impl App {
 		let rotation_b = pos_b as f32 * std::f32::consts::PI * 20.0;
 
 		let disc_a: Element<Message> = Element::from(
-			Canvas::new(RotatingDisc::new(rotation_a, deck_a.is_playing, &self.disc_cache_a))
-				.width(Length::Fixed(100.0))
-				.height(Length::Fixed(100.0)),
+			Canvas::new(RotatingDisc::new(rotation_a, deck_a.bpm, deck_a.is_playing, &self.disc_cache_a))
+				.width(Length::Fixed(160.0))
+				.height(Length::Fixed(160.0)),
 		)
 		.map(|_| Message::Tick(std::time::Instant::now()));
 
 		let disc_b: Element<Message> = Element::from(
-			Canvas::new(RotatingDisc::new(rotation_b, deck_b.is_playing, &self.disc_cache_b))
-				.width(Length::Fixed(100.0))
-				.height(Length::Fixed(100.0)),
+			Canvas::new(RotatingDisc::new(rotation_b, deck_b.bpm, deck_b.is_playing, &self.disc_cache_b))
+				.width(Length::Fixed(160.0))
+				.height(Length::Fixed(160.0)),
 		)
 		.map(|_| Message::Tick(std::time::Instant::now()));
 

@@ -10,14 +10,16 @@ const MARKER_COLOR: Color = Color::from_rgba(1.0, 0.3, 0.3, 1.0);
 
 pub struct RotatingDisc<'a> {
     rotation: f32, // ラジアン
+    bpm: f32,
     is_playing: bool,
     cache: &'a Cache,
 }
 
 impl<'a> RotatingDisc<'a> {
-    pub fn new(rotation: f32, is_playing: bool, cache: &'a Cache) -> Self {
+    pub fn new(rotation: f32, bpm: f32, is_playing: bool, cache: &'a Cache) -> Self {
         Self {
             rotation,
+            bpm,
             is_playing,
             cache,
         }
@@ -65,6 +67,28 @@ impl<'a> canvas::Program<()> for RotatingDisc<'a> {
             let hole_radius = radius * 0.05;
             let hole = Path::circle(center, hole_radius);
             frame.fill(&hole, Color::BLACK);
+
+            // BPM表示
+            if self.bpm > 0.0 {
+                frame.fill_text(canvas::Text {
+                    content: format!("{:.0}", self.bpm),
+                    position: Point::new(center.x, center.y - label_radius * 0.25),
+                    color: Color::WHITE,
+                    size: iced::Pixels(label_radius * 0.75),
+                    horizontal_alignment: iced::alignment::Horizontal::Center,
+                    vertical_alignment: iced::alignment::Vertical::Center,
+                    ..canvas::Text::default()
+                });
+                frame.fill_text(canvas::Text {
+                    content: "BPM".to_string(),
+                    position: Point::new(center.x, center.y + label_radius * 0.55),
+                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.7),
+                    size: iced::Pixels(label_radius * 0.3),
+                    horizontal_alignment: iced::alignment::Horizontal::Center,
+                    vertical_alignment: iced::alignment::Vertical::Center,
+                    ..canvas::Text::default()
+                });
+            }
 
             // 回転マーカー（ラベル上）
             let marker_angles = [
