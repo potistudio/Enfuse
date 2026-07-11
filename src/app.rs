@@ -571,9 +571,27 @@ impl App {
 		};
 
 		// --- Mixer ---
-		let fader_a = vertical_slider(0.0..=1.0, self.volume_a, Message::VolumeAChanged).step(0.01);
-		let fader_b = vertical_slider(0.0..=1.0, self.volume_b, Message::VolumeBChanged).step(0.01);
-		let crossfader = slider(-1.0..=1.0, self.crossfader, Message::CrossfaderChanged).step(0.01);
+		let fader_a = container(
+			vertical_slider(0.0..=1.0, self.volume_a, Message::VolumeAChanged)
+				.step(0.01)
+				.width(26.0)
+				.height(150)
+				.style(fader_style),
+		)
+		.padding([12, 16])
+		.style(fader_track_style);
+		let fader_b = container(
+			vertical_slider(0.0..=1.0, self.volume_b, Message::VolumeBChanged)
+				.step(0.01)
+				.width(26.0)
+				.height(150)
+				.style(fader_style),
+		)
+		.padding([12, 16])
+		.style(fader_track_style);
+		let crossfader = slider(-1.0..=1.0, self.crossfader, Message::CrossfaderChanged)
+			.step(0.01)
+			.style(slider_style);
 
 		// --- Rotating Discs ---
 		let rotation_a = pos_a as f32 * std::f32::consts::PI * 20.0;
@@ -593,18 +611,30 @@ impl App {
 		)
 		.map(|_| Message::Tick(std::time::Instant::now()));
 
+		let vol_a_col = column![
+			text("VOL A").size(10).color(Color::from_rgb8(160, 160, 160)),
+			fader_a,
+			text(format!("{:.0}%", self.volume_a * 100.0))
+				.size(11)
+				.color(Color::from_rgb8(140, 140, 140))
+		]
+		.spacing(8)
+		.align_x(iced::Alignment::Center);
+
+		let vol_b_col = column![
+			text("VOL B").size(10).color(Color::from_rgb8(160, 160, 160)),
+			fader_b,
+			text(format!("{:.0}%", self.volume_b * 100.0))
+				.size(11)
+				.color(Color::from_rgb8(140, 140, 140))
+		]
+		.spacing(8)
+		.align_x(iced::Alignment::Center);
+
 		let mixer_view = column![
 			row![
-				row![disc_a, column![text("VOL A").size(10), fader_a]
-					.spacing(8)
-					.align_x(iced::Alignment::Center)]
-				.spacing(8)
-				.align_y(iced::Alignment::Center),
-				row![column![text("VOL B").size(10), fader_b]
-					.spacing(8)
-					.align_x(iced::Alignment::Center), disc_b]
-				.spacing(8)
-				.align_y(iced::Alignment::Center)
+				row![disc_a, vol_a_col].spacing(8).align_y(iced::Alignment::Center),
+				row![vol_b_col, disc_b].spacing(8).align_y(iced::Alignment::Center)
 			]
 			.spacing(30),
 			text("CROSSFADER").size(10),
@@ -612,7 +642,7 @@ impl App {
 		]
 		.spacing(16)
 		.align_x(iced::Alignment::Center)
-		.width(Length::FillPortion(1));
+		.width(Length::Shrink);
 
 		// --- Spectrum ---
 		let spectrum: Element<Message> = Element::from(
@@ -843,6 +873,50 @@ fn slider_style(_theme: &Theme, status: slider::Status) -> slider::Style {
 			border_color: Color::from_rgb8(80, 80, 80),
 			border_width: 1.0,
 		},
+	}
+}
+
+fn fader_style(_theme: &Theme, status: slider::Status) -> slider::Style {
+	let (handle_color, border_color) = match status {
+		slider::Status::Active => (Color::from_rgb8(220, 220, 220), Color::from_rgb8(70, 70, 70)),
+		slider::Status::Hovered => (Color::WHITE, Color::from_rgb8(100, 149, 237)),
+		slider::Status::Dragged => (Color::from_rgb8(100, 149, 237), Color::from_rgb8(150, 190, 255)),
+	};
+
+	slider::Style {
+		rail: slider::Rail {
+			backgrounds: (
+				iced::Background::Color(Color::from_rgb8(100, 149, 237)),
+				iced::Background::Color(Color::from_rgb8(28, 28, 28)),
+			),
+			border: iced::Border {
+				radius: 3.0.into(),
+				width: 1.0,
+				color: Color::from_rgb8(50, 50, 50),
+			},
+			width: 6.0,
+		},
+		handle: slider::Handle {
+			shape: slider::HandleShape::Rectangle {
+				width: 16,
+				border_radius: 4.0.into(),
+			},
+			background: iced::Background::Color(handle_color),
+			border_color,
+			border_width: 1.5,
+		},
+	}
+}
+
+fn fader_track_style(_theme: &Theme) -> container::Style {
+	container::Style {
+		background: Some(iced::Background::Color(Color::from_rgb8(10, 10, 10))),
+		border: iced::Border {
+			color: Color::from_rgb8(45, 45, 45),
+			width: 1.0,
+			radius: 6.0.into(),
+		},
+		..container::Style::default()
 	}
 }
 
