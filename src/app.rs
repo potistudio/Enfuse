@@ -16,6 +16,7 @@ use crate::ui::wipe::WipeOverlay;
 
 const WIPE_DURATION_SECS: f32 = 0.5;
 const TICK_MS: u64 = 16;
+const BPM_ANIM_DURATION_SECS: f32 = 0.35;
 
 pub(super) struct App {
 	audio_engine: AudioEngine,
@@ -59,6 +60,14 @@ pub(super) struct App {
 	wipe_animating_a: bool,
 	wipe_progress_b: f32,
 	wipe_animating_b: bool,
+
+	// BPM Counter Animation
+	bpm_display_a: f32,
+	bpm_display_prev_a: f32,
+	bpm_anim_a: f32,
+	bpm_display_b: f32,
+	bpm_display_prev_b: f32,
+	bpm_anim_b: f32,
 }
 
 impl Default for App {
@@ -91,6 +100,12 @@ impl Default for App {
 			wipe_animating_a: false,
 			wipe_progress_b: 1.0,
 			wipe_animating_b: false,
+			bpm_display_a: 0.0,
+			bpm_display_prev_a: 0.0,
+			bpm_anim_a: 1.0,
+			bpm_display_b: 0.0,
+			bpm_display_prev_b: 0.0,
+			bpm_anim_b: 1.0,
 		}
 	}
 }
@@ -195,8 +210,9 @@ impl App {
 		};
 
 		let wipe_active = self.wipe_animating_a || self.wipe_animating_b;
+		let bpm_anim_active = self.bpm_anim_a < 1.0 || self.bpm_anim_b < 1.0;
 
-		let time_sub = if is_playing || wipe_active {
+		let time_sub = if is_playing || wipe_active || bpm_anim_active {
 			iced::time::every(std::time::Duration::from_millis(TICK_MS)).map(Message::Tick)
 		} else {
 			Subscription::none()
@@ -212,6 +228,7 @@ impl App {
 			Message::Tick(_) => {
 				self.tick_wipe();
 				self.tick_spectrum();
+				self.tick_bpm_anim();
 				self.audio_engine.deck_a.lock().unwrap().tick_metronome();
 				self.audio_engine.deck_b.lock().unwrap().tick_metronome();
 			}
@@ -258,9 +275,17 @@ impl App {
 				}
 				self.apply_volumes();
 				self.start_wipe_a();
+				let deck = self.audio_engine.deck_a.lock().unwrap();
+				let effective_bpm = deck.bpm * deck.user_speed;
+				drop(deck);
+				self.set_bpm_display_a(effective_bpm);
 			}
 			Message::DeckASpeed(speed) => {
-				self.audio_engine.deck_a.lock().unwrap().set_speed(speed);
+				let mut deck = self.audio_engine.deck_a.lock().unwrap();
+				deck.set_speed(speed);
+				let effective_bpm = deck.bpm * deck.user_speed;
+				drop(deck);
+				self.set_bpm_display_a(effective_bpm);
 			}
 			Message::DeckBPlay => {
 				self.audio_engine.deck_b.lock().unwrap().play();
@@ -293,9 +318,17 @@ impl App {
 				}
 				self.apply_volumes();
 				self.start_wipe_b();
+				let deck = self.audio_engine.deck_b.lock().unwrap();
+				let effective_bpm = deck.bpm * deck.user_speed;
+				drop(deck);
+				self.set_bpm_display_b(effective_bpm);
 			}
 			Message::DeckBSpeed(speed) => {
-				self.audio_engine.deck_b.lock().unwrap().set_speed(speed);
+				let mut deck = self.audio_engine.deck_b.lock().unwrap();
+				deck.set_speed(speed);
+				let effective_bpm = deck.bpm * deck.user_speed;
+				drop(deck);
+				self.set_bpm_display_b(effective_bpm);
 			}
 			Message::DeckASeek(p) => {
 				let mut deck = self.audio_engine.deck_a.lock().unwrap();
@@ -365,6 +398,32 @@ impl App {
 	fn start_wipe_b(&mut self) {
 		self.wipe_progress_b = 0.0;
 		self.wipe_animating_b = true;
+	}
+
+	fn set_bpm_display_a(&mut self, value: f32) {
+		if (self.bpm_display_a - value).abs() > 0.05 {
+			self.bpm_display_prev_a = self.bpm_display_a;
+			self.bpm_display_a = value;
+			self.bpm_anim_a = 0.0;
+		}
+	}
+
+	fn set_bpm_display_b(&mut self, value: f32) {
+		if (self.bpm_display_b - value).abs() > 0.05 {
+			self.bpm_display_prev_b = self.bpm_display_b;
+			self.bpm_display_b = value;
+			self.bpm_anim_b = 0.0;
+		}
+	}
+
+	fn tick_bpm_anim(&mut self) {
+		let step = TICK_MS as f32 / 1000.0 / BPM_ANIM_DURATION_SECS;
+		if self.bpm_anim_a < 1.0 {
+			self.bpm_anim_a = (self.bpm_anim_a + step).min(1.0);
+		}
+		if self.bpm_anim_b < 1.0 {
+			self.bpm_anim_b = (self.bpm_anim_b + step).min(1.0);
+		}
 	}
 
 	fn tick_wipe(&mut self) {
@@ -596,7 +655,9 @@ impl App {
 		let disc_a: Element<Message> = Element::from(
 			Canvas::new(RotatingDisc::new(
 				rotation_a,
-				deck_a.bpm * deck_a.user_speed,
+				self.bpm_display_prev_a,
+				self.bpm_display_a,
+				self.bpm_anim_a,
 				deck_a.is_playing,
 				&self.disc_cache_a,
 			))
@@ -608,7 +669,9 @@ impl App {
 		let disc_b: Element<Message> = Element::from(
 			Canvas::new(RotatingDisc::new(
 				rotation_b,
-				deck_b.bpm * deck_b.user_speed,
+				self.bpm_display_prev_b,
+				self.bpm_display_b,
+				self.bpm_anim_b,
 				deck_b.is_playing,
 				&self.disc_cache_b,
 			))

@@ -10,16 +10,27 @@ const MARKER_COLOR: Color = Color::from_rgba(1.0, 0.3, 0.3, 1.0);
 
 pub struct RotatingDisc<'a> {
 	rotation: f32, // ラジアン
+	bpm_prev: f32,
 	bpm: f32,
+	bpm_anim: f32, // 0.0(切替直後) -> 1.0(表示確定)
 	is_playing: bool,
 	cache: &'a Cache,
 }
 
 impl<'a> RotatingDisc<'a> {
-	pub fn new(rotation: f32, bpm: f32, is_playing: bool, cache: &'a Cache) -> Self {
+	pub fn new(
+		rotation: f32,
+		bpm_prev: f32,
+		bpm: f32,
+		bpm_anim: f32,
+		is_playing: bool,
+		cache: &'a Cache,
+	) -> Self {
 		Self {
 			rotation,
+			bpm_prev,
 			bpm,
+			bpm_anim,
 			is_playing,
 			cache,
 		}
@@ -37,8 +48,8 @@ impl<'a> canvas::Program<()> for RotatingDisc<'a> {
 		bounds: Rectangle,
 		_cursor: mouse::Cursor,
 	) -> Vec<Geometry> {
-		// 再生中はキャッシュをクリア
-		if self.is_playing {
+		// 再生中、またはBPM切替アニメーション中はキャッシュをクリア
+		if self.is_playing || self.bpm_anim < 1.0 {
 			self.cache.clear();
 		}
 
@@ -100,29 +111,54 @@ impl<'a> canvas::Program<()> for RotatingDisc<'a> {
 			}
 
 			// BPM表示（マーカーより手前に描画して被らないようにする）
-			if self.bpm > 0.0 {
+			if self.bpm > 0.0 || self.bpm_prev > 0.0 {
 				let label_bg = Path::circle(center, label_radius);
 				frame.fill(&label_bg, LABEL_COLOR);
 				frame.fill(&hole, Color::BLACK);
 
-				frame.fill_text(canvas::Text {
-					content: format!("{:.0}", self.bpm),
-					position: Point::new(center.x, center.y - label_radius * 0.25),
-					color: Color::WHITE,
-					size: iced::Pixels(label_radius * 0.75),
-					horizontal_alignment: iced::alignment::Horizontal::Center,
-					vertical_alignment: iced::alignment::Vertical::Center,
-					..canvas::Text::default()
-				});
-				frame.fill_text(canvas::Text {
-					content: "BPM".to_string(),
-					position: Point::new(center.x, center.y + label_radius * 0.55),
-					color: Color::from_rgba(1.0, 1.0, 1.0, 0.7),
-					size: iced::Pixels(label_radius * 0.3),
-					horizontal_alignment: iced::alignment::Horizontal::Center,
-					vertical_alignment: iced::alignment::Vertical::Center,
-					..canvas::Text::default()
-				});
+				// カウンターのように上下にフェード/スライドしながら切り替わる
+				let progress = self.bpm_anim.clamp(0.0, 1.0);
+				let eased = 1.0 - (1.0 - progress) * (1.0 - progress); // ease-out
+				let travel = label_radius * 0.9;
+
+				if self.bpm_prev > 0.0 && progress < 1.0 {
+					frame.fill_text(canvas::Text {
+						content: format!("{:.0}", self.bpm_prev),
+						position: Point::new(
+							center.x,
+							center.y - label_radius * 0.25 - eased * travel,
+						),
+						color: Color::from_rgba(1.0, 1.0, 1.0, 1.0 - eased),
+						size: iced::Pixels(label_radius * 0.75),
+						horizontal_alignment: iced::alignment::Horizontal::Center,
+						vertical_alignment: iced::alignment::Vertical::Center,
+						..canvas::Text::default()
+					});
+				}
+
+				if self.bpm > 0.0 {
+					frame.fill_text(canvas::Text {
+						content: format!("{:.0}", self.bpm),
+						position: Point::new(
+							center.x,
+							center.y - label_radius * 0.25 + (1.0 - eased) * travel,
+						),
+						color: Color::from_rgba(1.0, 1.0, 1.0, eased),
+						size: iced::Pixels(label_radius * 0.75),
+						horizontal_alignment: iced::alignment::Horizontal::Center,
+						vertical_alignment: iced::alignment::Vertical::Center,
+						..canvas::Text::default()
+					});
+					frame.fill_text(canvas::Text {
+						content: "BPM".to_string(),
+						position: Point::new(center.x, center.y + label_radius * 0.55),
+						color: Color::from_rgba(1.0, 1.0, 1.0, 0.7 * eased),
+						size: iced::Pixels(label_radius * 0.3),
+						horizontal_alignment: iced::alignment::Horizontal::Center,
+						vertical_alignment: iced::alignment::Vertical::Center,
+						..canvas::Text::default()
+					});
+				}
 			}
 		});
 
