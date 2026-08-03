@@ -337,6 +337,45 @@ impl Deck {
 		self.last_beat_index = -1; // Reset
 	}
 
+	/// Match this deck's tempo and beat phase to a master deck's current state.
+	/// Tempo: set speed so effective BPM matches. Phase: seek to the nearest
+	/// aligned beat position (shortest phase offset within ±0.5 beat).
+	pub fn beat_match_to(
+		&mut self,
+		master_bpm: f32,
+		master_speed: f32,
+		master_beat_offset: f32,
+		master_pos: Duration,
+	) -> bool {
+		if self.bpm <= 0.0 || master_bpm <= 0.0 || self.samples.is_empty() {
+			return false;
+		}
+
+		let master_eff_bpm = master_bpm * master_speed;
+		let new_speed = (master_eff_bpm / self.bpm).clamp(0.5, 1.5);
+		self.set_speed(new_speed);
+
+		let master_beat = 60.0 / master_bpm as f64;
+		let slave_beat = 60.0 / self.bpm as f64;
+		let pos_m = master_pos.as_secs_f64();
+		let pos_s = self.get_position().as_secs_f64();
+
+		let phase_m = ((pos_m - master_beat_offset as f64) / master_beat).rem_euclid(1.0);
+		let phase_s = ((pos_s - self.beat_offset as f64) / slave_beat).rem_euclid(1.0);
+
+		let mut delta = phase_m - phase_s;
+		if delta > 0.5 {
+			delta -= 1.0;
+		} else if delta < -0.5 {
+			delta += 1.0;
+		}
+
+		let new_pos = (pos_s + delta * slave_beat).max(0.0);
+		self.seek_to(Duration::from_secs_f64(new_pos));
+		self.last_beat_index = -1;
+		true
+	}
+
 	/// 現在位置から拍を検出し、新しい拍ならクリック音を再生
 	pub fn tick_metronome(&mut self) {
 		if !self.metronome_enabled || !self.is_playing || self.bpm <= 0.0 {

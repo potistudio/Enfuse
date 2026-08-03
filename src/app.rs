@@ -113,6 +113,9 @@ pub(super) enum Message {
 	// Metronome
 	DeckMetronome(usize),
 
+	// Beat match: sync this deck's tempo + phase to the other deck
+	DeckBeatMatch(usize),
+
 	// MIDI (FLX4)
 	Midi(Vec<u8>),
 }
@@ -274,6 +277,30 @@ impl App {
 			}
 			Message::DeckMetronome(id) => {
 				self.audio_engine.decks[id].lock().unwrap().toggle_metronome();
+			}
+			Message::DeckBeatMatch(id) => {
+				let other = 1 - id;
+				let (m_bpm, m_speed, m_offset, m_pos, m_empty) = {
+					let master = self.audio_engine.decks[other].lock().unwrap();
+					(
+						master.bpm,
+						master.user_speed,
+						master.beat_offset,
+						master.get_position(),
+						master.samples.is_empty(),
+					)
+				};
+				if m_bpm <= 0.0 || m_empty {
+					return Task::none();
+				}
+
+				let mut slave = self.audio_engine.decks[id].lock().unwrap();
+				if !slave.beat_match_to(m_bpm, m_speed, m_offset, m_pos) {
+					return Task::none();
+				}
+				let effective_bpm = slave.bpm * slave.user_speed;
+				drop(slave);
+				self.set_bpm_display(id, effective_bpm);
 			}
 			Message::Midi(bytes) => {
 				let hex = bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ");
@@ -628,7 +655,10 @@ fn view_deck<'a>(id: usize, deck: &Deck, state: &'a DeckState) -> Element<'a, Me
 					"METRO OFF"
 				})
 				.on_press(Message::DeckMetronome(id))
-				.style(deck_button_style)
+				.style(deck_button_style),
+				button("SYNC")
+					.on_press(Message::DeckBeatMatch(id))
+					.style(deck_button_style)
 			]
 			.spacing(8),
 			eq_row,
