@@ -3,8 +3,8 @@
 use super::features::FPS;
 use super::infer::Activations;
 
-const MIN_BPM: f32 = 40.0;
-const MAX_BPM: f32 = 220.0;
+const MIN_BPM: f32 = 55.0;
+const MAX_BPM: f32 = 200.0;
 const SNAP_THRESHOLD: f32 = 0.3;
 
 /// Decode BPM + first-beat offset (seconds) from CRNN activations.
@@ -13,20 +13,22 @@ pub fn decode_bpm_offset(act: &Activations) -> Option<(f32, f32)> {
 		return None;
 	}
 
-	// Combined strength: beats + downbeats (DBN-style dual stream, simplified)
+	// Tempo from beat channel only — adding downbeats biases autocorr toward
+	// half-tempo / bar harmonics (often landing near ~70 or ~140).
+	let (mut bpm, period) = estimate_tempo(&act.beat, FPS)?;
+
+	// Tracking can use a bit of downbeat emphasis for phase.
 	let strength: Vec<f32> = act
 		.beat
 		.iter()
 		.zip(act.downbeat.iter())
-		.map(|(&b, &d)| b + d)
+		.map(|(&b, &d)| b + 0.35 * d)
 		.collect();
 
-	let (mut bpm, period) = estimate_tempo(&strength, FPS)?;
 	let beats = track_beats_dp(&strength, period);
 	let beat_offset = if let Some(&first) = beats.first() {
 		first as f32 / FPS
 	} else {
-		// Fallback: strongest peak in first 2 beats
 		let search = ((period * 2.0).ceil() as usize).min(strength.len());
 		let idx = strength[..search]
 			.iter()
@@ -37,7 +39,6 @@ pub fn decode_bpm_offset(act: &Activations) -> Option<(f32, f32)> {
 		idx as f32 / FPS
 	};
 
-	// Prefer downbeat near the first tracked beat for offset refinement
 	let beat_offset = refine_offset_with_downbeat(act, beat_offset, period);
 
 	let nearest = bpm.round();
@@ -61,60 +62,58 @@ fn estimate_tempo(env: &[f32], fps: f32) -> Option<(f32, f32)> {
 		return None;
 	}
 
-	// Mean-center for autocorrelation
 	let mean = env.iter().sum::<f32>() / n as f32;
 	let centered: Vec<f32> = env.iter().map(|x| x - mean).collect();
 
-	// Raw (unweighted) autocorrelation — no 120-BPM Log-Gaussian prior.
-	// That prior previously pulled ~160 BPM songs toward ~130.
 	let mut corr = vec![0.0f32; max_lag + 1];
 	for lag in min_lag..=max_lag {
 		corr[lag] = autocorr_at(&centered, lag);
 	}
 
-	// Local maxima only (avoid shoulders between competing peaks).
-	let mut peaks: Vec<(usize, f32)> = Vec::new();
-	for lag in min_lag..=max_lag {
-		let c = corr[lag];
-		let left = if lag > min_lag { corr[lag - 1] } else { f32::NEG_INFINITY };
-		let right = if lag < max_lag { corr[lag + 1] } else { f32::NEG_INFINITY };
-		if c >= left && c >= right {
-			peaks.push((lag, c));
+	// Primary: median inter-onset interval. Autocorr harmonics (×2 / ÷2) and
+	// fixed-grid F1 scores are unreliable under frame-period jitter and were
+	// locking estimates onto ~70 / ~140 BPM.
+	let best_lag_i = if let Some(ioi) = median_ioi_lag(env, min_lag, max_lag) {
+		let mut lag = ioi;
+		// If peak-picking skipped every other beat, IOI is ~2× true period.
+		// Trust the half-lag only when its autocorr is clearly stronger.
+		let half = ioi / 2;
+		if half >= min_lag && corr[half] > corr[ioi] * 1.15 {
+			lag = half;
 		}
-	}
-	if peaks.is_empty() {
-		return None;
-	}
-
-	// Prefer peaks in a DJ-usable band so harmonic submultiples (e.g. 40 BPM
-	// for a 160 BPM pulse train) do not win on raw lag length alone.
-	const PREFERRED_MIN_BPM: f32 = 70.0;
-	const PREFERRED_MAX_BPM: f32 = 180.0;
-	let in_band = |lag: usize| {
-		let bpm = 60.0 * fps / lag as f32;
-		(PREFERRED_MIN_BPM..=PREFERRED_MAX_BPM).contains(&bpm)
+		// If IOI is a half-beat (too fast), prefer double when autocorr agrees.
+		let dbl = ioi.saturating_mul(2);
+		if dbl <= max_lag && corr[dbl] > corr[lag] * 1.25 && corr[dbl] > corr[ioi] {
+			// Only when the IOI itself looks like a weak harmonic
+			if corr[ioi] < corr[dbl] * 0.85 {
+				lag = dbl;
+			}
+		}
+		lag
+	} else {
+		// Fallback: strongest autocorr local maximum
+		let mut best_c = f32::NEG_INFINITY;
+		let mut best_l = min_lag;
+		for lag in min_lag..=max_lag {
+			let c = corr[lag];
+			let left = if lag > min_lag {
+				corr[lag - 1]
+			} else {
+				f32::NEG_INFINITY
+			};
+			let right = if lag < max_lag {
+				corr[lag + 1]
+			} else {
+				f32::NEG_INFINITY
+			};
+			if c >= left && c >= right && c > best_c {
+				best_c = c;
+				best_l = lag;
+			}
+		}
+		best_l
 	};
 
-	let mut best_corr = f32::NEG_INFINITY;
-	let mut best_lag_i = peaks[0].0;
-	let mut found_in_band = false;
-	for &(lag, c) in &peaks {
-		let band = in_band(lag);
-		if band && (!found_in_band || c > best_corr) {
-			found_in_band = true;
-			best_corr = c;
-			best_lag_i = lag;
-		} else if !found_in_band && c > best_corr {
-			best_corr = c;
-			best_lag_i = lag;
-		}
-	}
-
-	if !best_corr.is_finite() {
-		return None;
-	}
-
-	// Parabolic interpolation around peak lag
 	let mut best_lag = best_lag_i as f32;
 	if best_lag_i > min_lag && best_lag_i < max_lag {
 		let y0 = corr[best_lag_i - 1];
@@ -128,6 +127,46 @@ fn estimate_tempo(env: &[f32], fps: f32) -> Option<(f32, f32)> {
 
 	let bpm = 60.0 * fps / best_lag;
 	Some((bpm, best_lag))
+}
+
+fn median_ioi_lag(env: &[f32], min_lag: usize, max_lag: usize) -> Option<usize> {
+	let peaks = peak_pick(env);
+	if peaks.len() < 4 {
+		return None;
+	}
+	let mut iois: Vec<usize> = peaks.windows(2).map(|w| w[1] - w[0]).collect();
+	iois.retain(|&d| d >= min_lag && d <= max_lag);
+	if iois.len() < 3 {
+		return None;
+	}
+	iois.sort_unstable();
+	Some(iois[iois.len() / 2])
+}
+
+fn peak_pick(env: &[f32]) -> Vec<usize> {
+	let n = env.len();
+	if n < 3 {
+		return Vec::new();
+	}
+	let max_v = env.iter().copied().fold(0.0f32, f32::max);
+	let mean = env.iter().sum::<f32>() / n as f32;
+	let thresh = (mean + (max_v - mean) * 0.35).max(mean * 1.5);
+
+	let mut peaks = Vec::new();
+	for i in 1..n - 1 {
+		if env[i] >= thresh && env[i] >= env[i - 1] && env[i] >= env[i + 1] {
+			if peaks.last().is_none_or(|p| i - p >= min_peak_distance()) {
+				peaks.push(i);
+			} else if env[i] > env[*peaks.last().unwrap()] {
+				*peaks.last_mut().unwrap() = i;
+			}
+		}
+	}
+	peaks
+}
+
+fn min_peak_distance() -> usize {
+	((FPS * 60.0 / MAX_BPM).floor() as usize).max(1)
 }
 
 fn autocorr_at(centered: &[f32], lag: usize) -> f32 {
@@ -151,7 +190,6 @@ fn track_beats_dp(act: &[f32], period: f32) -> Vec<usize> {
 	}
 
 	let period_i = period.round().max(1.0) as isize;
-	// Search window ±30% of period
 	let tol = ((period * 0.3).ceil() as isize).max(1);
 	let min_step = (period_i - tol).max(1);
 	let max_step = period_i + tol;
@@ -160,7 +198,6 @@ fn track_beats_dp(act: &[f32], period: f32) -> Vec<usize> {
 	let mut back = vec![usize::MAX; n];
 
 	for t in 0..n {
-		// Path starting at t
 		score[t] = act[t];
 		let t_i = t as isize;
 		for step in min_step..=max_step {
@@ -169,7 +206,6 @@ fn track_beats_dp(act: &[f32], period: f32) -> Vec<usize> {
 				continue;
 			}
 			let p = prev as usize;
-			// Tempo tightness: prefer steps near `period`
 			let tempo_pen = -((step as f32 - period).abs() / period) * 0.1;
 			let cand = score[p] + act[t] + tempo_pen;
 			if cand > score[t] {
@@ -179,7 +215,6 @@ fn track_beats_dp(act: &[f32], period: f32) -> Vec<usize> {
 		}
 	}
 
-	// Backtrack from best score in the last period window
 	let start_search = n.saturating_sub(max_step as usize + 1);
 	let mut best_end = start_search;
 	let mut best_s = f32::NEG_INFINITY;
@@ -247,28 +282,39 @@ mod tests {
 		env
 	}
 
-	#[test]
-	fn estimate_tempo_keeps_160_bpm() {
-		let env = pulse_train(160.0, 12.0, FPS);
+	fn assert_tempo_near(bpm_true: f32, tol: f32) {
+		let env = pulse_train(bpm_true, 16.0, FPS);
 		let (bpm, _) = estimate_tempo(&env, FPS).expect("tempo");
 		assert!(
-			(bpm - 160.0).abs() < 3.0,
-			"expected ~160 BPM, got {bpm}"
+			(bpm - bpm_true).abs() < tol,
+			"expected ~{bpm_true} BPM, got {bpm}"
 		);
 	}
 
 	#[test]
+	fn estimate_tempo_across_range() {
+		for &bpm in &[90.0, 100.0, 120.0, 128.0, 140.0, 160.0, 174.0] {
+			assert_tempo_near(bpm, 4.0);
+		}
+	}
+
+	#[test]
 	fn estimate_tempo_not_pulled_to_130_from_160() {
-		// Dominant 160 Hz pulse train plus a weaker 130-ish distractor.
-		let mut env = pulse_train(160.0, 12.0, FPS);
-		let distractor = pulse_train(130.0, 12.0, FPS);
+		let mut env = pulse_train(160.0, 16.0, FPS);
+		let distractor = pulse_train(130.0, 16.0, FPS);
 		for (e, d) in env.iter_mut().zip(distractor.iter()) {
 			*e += d * 0.35;
 		}
 		let (bpm, _) = estimate_tempo(&env, FPS).expect("tempo");
 		assert!(
 			(bpm - 160.0).abs() < 5.0,
-			"120-BPM prior used to pull this toward ~130; got {bpm}"
+			"expected ~160, got {bpm}"
 		);
+	}
+
+	#[test]
+	fn estimate_tempo_not_locked_to_70_or_140() {
+		assert_tempo_near(110.0, 5.0);
+		assert_tempo_near(95.0, 5.0);
 	}
 }
