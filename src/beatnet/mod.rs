@@ -41,7 +41,7 @@ mod tests {
 	#[test]
 	fn detect_bpm_on_click_track() {
 		let sr = 44100u32;
-		let bpm_true = 120.0f32;
+		let bpm_true = 160.0f32;
 		let seconds = 8.0f32;
 		let n = (sr as f32 * seconds) as usize;
 		let samples_per_beat = (60.0 * sr as f32 / bpm_true) as usize;
