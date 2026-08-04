@@ -103,7 +103,7 @@ pub fn log_spect_features(mono_22k: &[f32]) -> Option<Vec<f32>> {
 					acc += buffer[k].norm() * w;
 				}
 			}
-			bands[b] = (1.0 + acc).ln();
+			bands[b] = (1.0 + acc).log10();
 		}
 		log_spec[frame_idx * NUM_BANDS..(frame_idx + 1) * NUM_BANDS].copy_from_slice(&bands);
 	}

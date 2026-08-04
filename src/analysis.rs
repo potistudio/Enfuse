@@ -136,7 +136,9 @@ pub struct BpmResult {
 }
 
 pub fn detect_bpm(samples: &[f32], sample_rate: u32, channels: u16) -> BpmResult {
-	// Prefer BeatNet (LOG_SPECT → CRNN → DP). Fall back to spectral-flux autocorrelation.
+	// BeatNet offline path (LOG_SPECT → CRNN → beat decode). Spectral-flux is
+	// fallback only — if BeatNet mis-detects, fix feature/model fidelity, don't
+	// prefer the procedural estimator.
 	if let Some(result) = crate::beatnet::detect_bpm(samples, sample_rate, channels) {
 		return result;
 	}
@@ -306,20 +308,12 @@ fn estimate_tempo(onset_env: &[f32], sample_rate: u32, hop_size: usize, planner:
 
 		let raw_corr = buffer[lag].re * scale;
 
-		// 【重要】バイアス補正
-		// ラグが大きいほど重なりが減るので、重なっているサンプル数(n - lag)で割って正規化
+		// Bias correction: longer lags overlap fewer samples
 		let divisor = (n - lag) as f32;
 		let normalized_corr = if divisor > 0.0 { raw_corr / divisor } else { 0.0 };
 
-		// Weighting (Log-Gaussian preference for 120 BPM)
-		// 一般的な楽曲は100-140付近が多いため、そこに重み付けをする
-		let bpm_at_lag = 60.0 * env_sr / lag as f32;
-		let weight = (-((bpm_at_lag.ln() - 120.0f32.ln()).powi(2)) / (2.0 * 0.45f32.powi(2))).exp();
-
-		let weighted_corr = normalized_corr * weight;
-
-		if weighted_corr > max_corr {
-			max_corr = weighted_corr;
+		if normalized_corr > max_corr {
+			max_corr = normalized_corr;
 			best_lag = lag as f32;
 		}
 	}
@@ -328,9 +322,12 @@ fn estimate_tempo(onset_env: &[f32], sample_rate: u32, hop_size: usize, planner:
 		return (0.0, 0.0);
 	}
 
+	// Resolve common octave / 3:2 confusions without a 120-BPM prior.
+	best_lag = resolve_tempo_lag(&buffer, best_lag, min_lag, max_lag.min(n / 2), scale, n, env_sr);
+
 	// 3. 放物線補間 (Parabolic Interpolation) によるサブフレーム精度の向上
 	// ピークの前後を使って、真のピーク位置を推定する
-	let idx = best_lag as usize;
+	let idx = best_lag.round() as usize;
 	if idx > 0 && idx < buffer.len() - 1 {
 		let y_alpha = buffer[idx - 1].re; // 前
 		let y_beta = buffer[idx].re; // 現在
@@ -363,6 +360,77 @@ fn estimate_tempo(onset_env: &[f32], sample_rate: u32, hop_size: usize, planner:
 	}
 
 	(bpm, max_corr)
+}
+
+/// Among octave / 3:2 relatives of `best_lag`, pick the lag with highest
+/// normalized autocorrelation that still looks like a local peak.
+fn resolve_tempo_lag(
+	buffer: &[Complex<f32>],
+	best_lag: f32,
+	min_lag: usize,
+	max_lag: usize,
+	scale: f32,
+	n: usize,
+	env_sr: f32,
+) -> f32 {
+	let lag_corr = |lag: usize| -> f32 {
+		if lag == 0 || lag >= buffer.len() || lag > n / 2 {
+			return f32::NEG_INFINITY;
+		}
+		let divisor = (n - lag) as f32;
+		if divisor <= 0.0 {
+			return f32::NEG_INFINITY;
+		}
+		buffer[lag].re * scale / divisor
+	};
+
+	let base = best_lag.round().max(1.0) as usize;
+	let base_c = lag_corr(base);
+	let factors: [(f32, f32); 5] = [
+		(1.0, 1.0),
+		(1.0, 2.0), // half lag → double BPM
+		(2.0, 1.0), // double lag → half BPM
+		(2.0, 3.0), // 2/3 lag → 3/2 BPM (150↔100 style)
+		(3.0, 2.0), // 3/2 lag → 2/3 BPM
+	];
+
+	let mut best = base;
+	let mut best_score = {
+		let bpm = 60.0 * env_sr / base as f32;
+		let bonus = if (70.0..=180.0).contains(&bpm) {
+			0.02 * base_c.abs()
+		} else {
+			0.0
+		};
+		base_c + bonus
+	};
+
+	for (num, den) in factors {
+		let lag = ((base as f32) * num / den).round() as usize;
+		if lag < min_lag || lag > max_lag || lag == base {
+			continue;
+		}
+		// Require a local peak so we don't slide onto a shoulder.
+		let c = lag_corr(lag);
+		let left = lag_corr(lag.saturating_sub(1));
+		let right = lag_corr(lag + 1);
+		if c < left || c < right {
+			continue;
+		}
+		let bpm = 60.0 * env_sr / lag as f32;
+		let band_bonus = if (70.0..=180.0).contains(&bpm) {
+			0.02 * c.abs()
+		} else {
+			0.0
+		};
+		let score = c + band_bonus;
+		if score > best_score {
+			best_score = score;
+			best = lag;
+		}
+	}
+
+	best as f32
 }
 
 pub fn compute_spectrum(samples: &[f32]) -> Vec<f32> {
