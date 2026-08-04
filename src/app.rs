@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use crate::analysis;
 use crate::audio::{self, AudioEngine, DECK_COUNT, Deck, DeckData};
 use crate::ui::disc::RotatingDisc;
+use crate::ui::knob::Knob;
 use crate::ui::spectrum::Spectrum;
 use crate::ui::waveform::{Waveform, WaveformOutput};
 use crate::ui::wipe::WipeOverlay;
@@ -51,9 +52,9 @@ impl Default for DeckState {
 			waveform_cache: Cache::default(),
 			zoom_level: 1.0,
 
-			eq_high: 0.0,
-			eq_mid: 0.0,
-			eq_low: 0.0,
+			eq_high: 0.5,
+			eq_mid: 0.5,
+			eq_low: 0.5,
 
 			disc_cache: Cache::default(),
 			wipe_progress: 0.0,
@@ -606,13 +607,16 @@ fn view_deck<'a>(id: usize, deck: &Deck, state: &'a DeckState) -> Element<'a, Me
 	};
 
 	let eq_col = move |label: &'static str, val: f32, ctor: fn(usize, f32) -> Message| {
+		let knob: Element<'a, f32> = Element::from(
+			Canvas::new(Knob::new(val))
+				.width(Length::Fixed(44.0))
+				.height(Length::Fixed(44.0)),
+		);
 		column![
 			text(label).size(10).color(Color::from_rgb8(160, 160, 160)),
-			vertical_slider(0.0..=1.0, val, move |v| ctor(id, v))
-				.step(0.01)
-				.height(80)
-				.style(eq_slider_style)
+			knob.map(move |v| ctor(id, v)),
 		]
+		.spacing(4)
 		.align_x(iced::Alignment::Center)
 	};
 
@@ -621,7 +625,7 @@ fn view_deck<'a>(id: usize, deck: &Deck, state: &'a DeckState) -> Element<'a, Me
 		eq_col("MID", state.eq_mid, Message::DeckMid),
 		eq_col("LO", state.eq_low, Message::DeckLow)
 	]
-	.spacing(12);
+	.spacing(16);
 
 	let status_text = if state.loading.is_some() {
 		"Loading..."
@@ -772,33 +776,3 @@ fn fader_track_style(_theme: &Theme) -> container::Style {
 	}
 }
 
-fn eq_slider_style(_theme: &Theme, status: slider::Status) -> slider::Style {
-	let handle_color = match status {
-		slider::Status::Active => Color::from_rgb8(200, 200, 200),
-		slider::Status::Hovered => Color::WHITE,
-		slider::Status::Dragged => Color::from_rgb8(211, 253, 80),
-	};
-
-	slider::Style {
-		rail: slider::Rail {
-			backgrounds: (
-				iced::Background::Color(Color::from_rgb8(60, 60, 60)),
-				iced::Background::Color(Color::from_rgb8(30, 30, 30)),
-			),
-			border: iced::Border {
-				radius: 2.0.into(),
-				..iced::Border::default()
-			},
-			width: 3.0,
-		},
-		handle: slider::Handle {
-			shape: slider::HandleShape::Rectangle {
-				width: 14,
-				border_radius: 2.0.into(),
-			},
-			background: iced::Background::Color(handle_color),
-			border_color: Color::from_rgb8(80, 80, 80),
-			border_width: 1.0,
-		},
-	}
-}
