@@ -132,7 +132,7 @@ where
 	// Parallelize Analysis (Waveform & BPM)
 	let (waveform, bpm_result) = rayon::join(
 		|| analysis::analyze_waveform(&samples, sample_rate),
-		|| analysis::detect_bpm(&samples, sample_rate),
+		|| analysis::detect_bpm(&samples, sample_rate, channels),
 	);
 
 	Ok(DeckData {

@@ -25,3 +25,5 @@ log = "0.4.33"
 rustfft = "6.4.1"
 logger = "0.4.0"
 midir = "0.11.0"
+ort = { version = "2.0.0-rc.13", default-features = true }
+ndarray = "0.17"

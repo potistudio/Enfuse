@@ -135,7 +135,15 @@ pub struct BpmResult {
 	pub beat_offset: f32, // 秒単位での最初の拍の位置
 }
 
-pub fn detect_bpm(samples: &[f32], sample_rate: u32) -> BpmResult {
+pub fn detect_bpm(samples: &[f32], sample_rate: u32, channels: u16) -> BpmResult {
+	// Prefer BeatNet (LOG_SPECT → CRNN → DP). Fall back to spectral-flux autocorrelation.
+	if let Some(result) = crate::beatnet::detect_bpm(samples, sample_rate, channels) {
+		return result;
+	}
+	detect_bpm_spectral_flux(samples, sample_rate)
+}
+
+fn detect_bpm_spectral_flux(samples: &[f32], sample_rate: u32) -> BpmResult {
 	let window_size = 2048;
 	let hop_size = 512;
 
