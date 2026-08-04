@@ -40,11 +40,7 @@ impl AudioEngine {
 			.map(|_| Arc::new(Mutex::new(Deck::new(mixer.clone()))))
 			.collect();
 
-		Self {
-			_stream,
-			mixer,
-			decks,
-		}
+		Self { _stream, mixer, decks }
 	}
 }
 
@@ -178,7 +174,7 @@ pub struct Deck {
 	pub control_cursor: Arc<AtomicU64>,
 	pub control_speed: Arc<AtomicU32>,
 
-	// EQ Control (0.0 - 1.0, 0.5 is flat)
+	// EQ Control (-1.0 - 1.0, 0.0 is flat)
 	pub low: Arc<AtomicU32>,
 	pub mid: Arc<AtomicU32>,
 	pub high: Arc<AtomicU32>,
@@ -207,9 +203,9 @@ impl Deck {
 			monitor_consumer: Arc::new(Mutex::new(None)),
 			control_cursor: Arc::new(AtomicU64::new(0)),
 			control_speed: Arc::new(AtomicU32::new(f32_to_u32(1.0))),
-			low: Arc::new(AtomicU32::new(f32_to_u32(0.5))),
-			mid: Arc::new(AtomicU32::new(f32_to_u32(0.5))),
-			high: Arc::new(AtomicU32::new(f32_to_u32(0.5))),
+			low: Arc::new(AtomicU32::new(f32_to_u32(0.0))),
+			mid: Arc::new(AtomicU32::new(f32_to_u32(0.0))),
+			high: Arc::new(AtomicU32::new(f32_to_u32(0.0))),
 			metronome_enabled: false,
 			last_beat_index: -1,
 		}
@@ -572,14 +568,14 @@ where
 		let t_mid = u32_to_f32(self.target_mid.load(Ordering::Relaxed));
 		let t_high = u32_to_f32(self.target_high.load(Ordering::Relaxed));
 
-		// 0.5 center -> 0dB
-		// Range: 0.0..1.0
-		// Map 0.0 -> -24dB, 0.5 -> 0dB, 1.0 -> 6dB
+		// 0.0 center -> 0dB
+		// Range: -1.0..1.0
+		// Map -1.0 -> -24dB, 0.0 -> 0dB, 1.0 -> 6dB
 		let map_gain = |v: f32| {
-			if v < 0.5 {
-				(v - 0.5) * 48.0 // (0.0 - 0.5)*48 = -24
+			if v < 0.0 {
+				v * 24.0 // -1.0 * 24 = -24
 			} else {
-				(v - 0.5) * 12.0 // (1.0 - 0.5)*12 = 6
+				v * 6.0 // 1.0 * 6 = 6
 			}
 		};
 

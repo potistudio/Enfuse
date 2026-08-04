@@ -52,9 +52,9 @@ impl Default for DeckState {
 			waveform_cache: Cache::default(),
 			zoom_level: 1.0,
 
-			eq_high: 0.5,
-			eq_mid: 0.5,
-			eq_low: 0.5,
+			eq_high: 0.0,
+			eq_mid: 0.0,
+			eq_low: 0.0,
 
 			disc_cache: Cache::default(),
 			wipe_progress: 0.0,
@@ -531,9 +531,7 @@ fn track_loader(deck_id: usize, path: PathBuf) -> Subscription<Message> {
 	Subscription::run_with((deck_id, path), track_loader_stream)
 }
 
-fn track_loader_stream(
-	(deck_id, path): &(usize, PathBuf),
-) -> impl iced::futures::Stream<Item = Message> + use<> {
+fn track_loader_stream((deck_id, path): &(usize, PathBuf)) -> impl iced::futures::Stream<Item = Message> + use<> {
 	let deck_id = *deck_id;
 	let path = path.clone();
 
@@ -775,4 +773,3 @@ fn fader_track_style(_theme: &Theme) -> container::Style {
 		..container::Style::default()
 	}
 }
-

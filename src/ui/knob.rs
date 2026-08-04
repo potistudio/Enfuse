@@ -5,11 +5,8 @@ use std::f32::consts::PI;
 
 const SWEEP: f32 = PI * 1.5; // 270°
 const START_ANGLE: f32 = PI * 0.75; // bottom-left
-const SENSITIVITY: f32 = 0.006;
-
-pub struct Knob {
-	value: f32,
-}
+const CENTER_ANGLE: f32 = START_ANGLE + SWEEP * 0.5;
+const SENSITIVITY: f32 = 0.012;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KnobState {
@@ -17,15 +14,19 @@ pub struct KnobState {
 	last_y: f32,
 }
 
+pub struct Knob {
+	value: f32,
+}
+
 impl Knob {
 	pub fn new(value: f32) -> Self {
 		Self {
-			value: value.clamp(0.0, 1.0),
+			value: value.clamp(-1.0, 1.0),
 		}
 	}
 
 	fn angle(&self) -> f32 {
-		START_ANGLE + self.value * SWEEP
+		START_ANGLE + (self.value + 1.0) * 0.5 * SWEEP
 	}
 }
 
@@ -63,7 +64,7 @@ impl canvas::Program<f32> for Knob {
 				}
 				let dy = state.last_y - position.y;
 				state.last_y = position.y;
-				let new_val = (self.value + dy * SENSITIVITY).clamp(0.0, 1.0);
+				let new_val = (self.value + dy * SENSITIVITY).clamp(-1.0, 1.0);
 				if (new_val - self.value).abs() < 0.001 {
 					return Some(canvas::Action::capture());
 				}
@@ -76,7 +77,7 @@ impl canvas::Program<f32> for Knob {
 				let y = match delta {
 					mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => *y,
 				};
-				let new_val = (self.value + y * 0.04).clamp(0.0, 1.0);
+				let new_val = (self.value + y * 0.08).clamp(-1.0, 1.0);
 				if (new_val - self.value).abs() < 0.001 {
 					return None;
 				}
@@ -137,14 +138,19 @@ impl canvas::Program<f32> for Knob {
 			},
 		);
 
-		// Value arc
-		if self.value > 0.001 {
+		// Value arc from center (0) toward current value
+		if self.value.abs() > 0.001 {
+			let (start, end) = if self.value > 0.0 {
+				(CENTER_ANGLE, self.angle())
+			} else {
+				(self.angle(), CENTER_ANGLE)
+			};
 			let value_arc = Path::new(|b| {
 				b.arc(canvas::path::Arc {
 					center,
 					radius: radius * 0.78,
-					start_angle: Radians(START_ANGLE),
-					end_angle: Radians(self.angle()),
+					start_angle: Radians(start),
+					end_angle: Radians(end),
 				});
 			});
 			frame.stroke(
@@ -183,20 +189,12 @@ impl canvas::Program<f32> for Knob {
 		);
 
 		// Center cap
-		frame.fill(
-			&Path::circle(center, radius * 0.12),
-			Color::from_rgb8(50, 50, 50),
-		);
+		frame.fill(&Path::circle(center, radius * 0.12), Color::from_rgb8(50, 50, 50));
 
 		vec![frame.into_geometry()]
 	}
 
-	fn mouse_interaction(
-		&self,
-		state: &Self::State,
-		bounds: Rectangle,
-		cursor: mouse::Cursor,
-	) -> mouse::Interaction {
+	fn mouse_interaction(&self, state: &Self::State, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
 		if state.dragging {
 			mouse::Interaction::Grabbing
 		} else if cursor.is_over(bounds) {
