@@ -6,7 +6,9 @@ use std::f32::consts::PI;
 const SWEEP: f32 = PI * 1.5; // 270°
 const START_ANGLE: f32 = PI * 0.75; // bottom-left
 const CENTER_ANGLE: f32 = START_ANGLE + SWEEP * 0.5;
-const SENSITIVITY: f32 = 0.012;
+const DRAG_SENSITIVITY: f32 = 0.008;
+const SCROLL_SENSITIVITY: f32 = 0.01;
+const CAPTURE_THRESHOLD: f32 = 0.001;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KnobState {
@@ -45,42 +47,53 @@ impl canvas::Program<f32> for Knob {
 				if !cursor.is_over(bounds) {
 					return None;
 				}
+
 				state.dragging = true;
+
 				if let Some(pos) = cursor.position() {
 					state.last_y = pos.y;
 				}
+
 				Some(canvas::Action::capture())
 			}
 			canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
 				if !state.dragging {
 					return None;
 				}
+
 				state.dragging = false;
+
 				Some(canvas::Action::capture())
 			}
 			canvas::Event::Mouse(mouse::Event::CursorMoved { position }) => {
 				if !state.dragging {
 					return None;
 				}
+
 				let dy = state.last_y - position.y;
-				state.last_y = position.y;
-				let new_val = (self.value + dy * SENSITIVITY).clamp(-1.0, 1.0);
-				if (new_val - self.value).abs() < 0.001 {
+				let new_val = (self.value + dy * DRAG_SENSITIVITY).clamp(-1.0, 1.0);
+				if (new_val - self.value).abs() < CAPTURE_THRESHOLD {
 					return Some(canvas::Action::capture());
 				}
+
+				state.last_y = position.y;
+
 				Some(canvas::Action::publish(new_val).and_capture())
 			}
 			canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
 				if !cursor.is_over(bounds) {
 					return None;
 				}
+
 				let y = match delta {
 					mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => *y,
 				};
-				let new_val = (self.value + y * 0.08).clamp(-1.0, 1.0);
-				if (new_val - self.value).abs() < 0.001 {
+
+				let new_val = (self.value - y * SCROLL_SENSITIVITY).clamp(-1.0, 1.0);
+				if (new_val - self.value).abs() < CAPTURE_THRESHOLD {
 					return None;
 				}
+
 				Some(canvas::Action::publish(new_val).and_capture())
 			}
 			_ => None,
